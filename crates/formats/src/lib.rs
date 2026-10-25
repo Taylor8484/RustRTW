@@ -10,6 +10,7 @@ pub mod assets;
 pub mod blitz;
 pub mod config;
 pub mod level;
+pub mod mesh;
 pub mod pack;
 pub mod save;
 
@@ -19,6 +20,7 @@ pub use assets::GameAssets;
 pub use config::{ExtraCfg, Options, StoryDat};
 pub use error::{Error, Result};
 pub use level::Level;
+pub use mesh::Mesh;
 pub use pack::{Pack, PackEntry, PackIndex};
 pub use save::PlayerFile;
 

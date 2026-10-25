@@ -9,3 +9,11 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+# The decoders the game crate will use for textures, sound and music; here
+# only to check every shipped file decodes (see tests/real_media.rs).
+[dev-dependencies]
+hound = "3.5"
+image = { version = "0.25", default-features = false, features = ["bmp", "jpeg"] }
+xmrs = "0.15"
+xmrsplayer = "0.15"

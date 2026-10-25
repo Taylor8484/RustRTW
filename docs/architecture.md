@@ -64,6 +64,23 @@ tested headless and outlive any framework upgrade or swap.
 - `config` — `options.cfg`, TOW's `extra.cfg`, WSW's `story.dat`. These
   parse like Blitz: missing ints read as 0, since the shipped WSW
   `options.cfg` is shorter than its loader expects.
+- `mesh` — `.3ds`, `.x` and `.md2`, produced as Blitz holds them after
+  `LoadMesh`/`LoadMD2` (Blitz coordinates, winding and normals; see the
+  module docs). The game crate converts to Bevy's coordinates.
+- Textures, sound and music are standard formats, so `formats` has no
+  parsers for them. The game crate decodes them with these crates, and
+  `tests/real_media.rs` checks every shipped file:
+  - Textures: 24-bit BMP (one 8-bit) and baseline JPEG, decoded with
+    `image`, which is also Bevy's decoder. Blitz texture flags 1 (colour),
+    2 (alpha), 4 (masked: black is transparent) and 6 are in use. The game
+    crate must reproduce how Blitz builds the alpha for flags 2 and 4 from
+    images that have no alpha channel. Check that against the Blitz source
+    in step 3.
+  - Sound: 16-bit PCM WAV, which Bevy's audio plays as is.
+  - Music: Impulse Tracker modules (`.it`, stored as `res3.dat` and other
+    loose `res*.dat` files) played with `xmrs`/`xmrsplayer` (MIT, pure Rust,
+    IT replay modelled on Schism Tracker). The originals played them through
+    FMOD, so playback may differ slightly by ear.
 - Saves and configs are kept as stored and written back byte-identically.
   Load-time fix-ups (e.g. RTWP's world pack 0 → `i * 10`) belong to profile
   loading.
