@@ -309,12 +309,7 @@ impl World {
             if tile != old_tile {
                 self.play_at_player(Sound::Convey(k), k);
             }
-            let (dx, dy) = match tile % 4 {
-                0 => (0, -1),
-                1 => (1, 0),
-                2 => (0, 1),
-                _ => (-1, 0),
-            };
+            let (dx, dy) = conveyor_dir(tile);
             // Anything a conveyor cannot carry on is crushed.
             if self.can_player_move(k, dx, dy) {
                 self.move_player(k, dx, dy);
@@ -358,15 +353,8 @@ impl World {
     /// The tile a player stepped off: switchers flip, breakaway tiles crumble,
     /// buttons pop up and the player's sign goes.
     fn leave_tile(&mut self, k: usize, x: i32, y: i32, old_tile: i32) {
-        let grid = &mut self.level.grid;
         if old_tile / 100 == 5 && (old_tile - 500) % 8 >= 4 {
-            // A switcher turns to face the other way.
-            let mut t = grid.get(x, y) + 2;
-            if (t - 100) % 8 <= 4 {
-                t -= 4;
-            }
-            grid.set(x, y, t);
-            self.events.push(Event::TileChanged { x, y });
+            self.flip_switcher(x, y);
         }
         if old_tile / 100 == 6 {
             // 600, 603 and 606 break into water, lava and nothing; the
@@ -392,6 +380,17 @@ impl World {
         }
     }
 
+    /// A switcher stepped off turns to face the other way.
+    pub(crate) fn flip_switcher(&mut self, x: i32, y: i32) {
+        let grid = &mut self.level.grid;
+        let mut t = grid.get(x, y) + 2;
+        if (t - 100) % 8 <= 4 {
+            t -= 4;
+        }
+        grid.set(x, y, t);
+        self.events.push(Event::TileChanged { x, y });
+    }
+
     /// Keeps a player on ice sliding: forward along the ice if possible,
     /// otherwise back.
     fn slide_on_ice(&mut self, k: usize, tile: i32, old_tile: i32) {
@@ -400,20 +399,7 @@ impl World {
             self.play_at_player(Sound::SlideIce(i), k);
         }
         let (mx, my) = (self.players[k].moving_x, self.players[k].moving_y);
-        // Curved ice turns the player; any other ice tile leaves both
-        // directions at (0, 0), as the original's unset locals.
-        let ((fx, fy), (bx, by)) = match tile {
-            400 => ((mx, my), (-mx, -my)),
-            401 if mx == -1 => ((0, 1), (1, 0)),
-            401 => ((1, 0), (0, 1)),
-            402 if mx == 1 => ((0, 1), (-1, 0)),
-            402 => ((-1, 0), (0, 1)),
-            403 if mx == 1 => ((0, -1), (-1, 0)),
-            403 => ((-1, 0), (0, -1)),
-            404 if mx == -1 => ((0, -1), (1, 0)),
-            404 => ((1, 0), (0, -1)),
-            _ => ((0, 0), (0, 0)),
-        };
+        let ((fx, fy), (bx, by)) = ice_turn(tile, mx, my);
         if self.can_player_move(k, fx, fy) {
             self.move_player(k, fx, fy);
         } else if self.can_player_move(k, bx, by) {
@@ -954,8 +940,36 @@ impl World {
     }
 }
 
+/// The forward and backward directions on ice tile `tile` when arriving
+/// along `(mx, my)`. Curved ice (401–404) turns; any other ice tile leaves
+/// both at (0, 0), as the original's unset locals.
+pub(crate) fn ice_turn(tile: i32, mx: i32, my: i32) -> ((i32, i32), (i32, i32)) {
+    match tile {
+        400 => ((mx, my), (-mx, -my)),
+        401 if mx == -1 => ((0, 1), (1, 0)),
+        401 => ((1, 0), (0, 1)),
+        402 if mx == 1 => ((0, 1), (-1, 0)),
+        402 => ((-1, 0), (0, 1)),
+        403 if mx == 1 => ((0, -1), (-1, 0)),
+        403 => ((-1, 0), (0, -1)),
+        404 if mx == -1 => ((0, -1), (1, 0)),
+        404 => ((1, 0), (0, -1)),
+        _ => ((0, 0), (0, 0)),
+    }
+}
+
+/// Where a conveyor tile carries things.
+pub(crate) fn conveyor_dir(tile: i32) -> (i32, i32) {
+    match tile % 4 {
+        0 => (0, -1),
+        1 => (1, 0),
+        2 => (0, 1),
+        _ => (-1, 0),
+    }
+}
+
 /// Blitz's `Cos`, in degrees.
-fn cos_deg(deg: f32) -> f32 {
+pub(crate) fn cos_deg(deg: f32) -> f32 {
     (f64::from(deg).to_radians()).cos() as f32
 }
 

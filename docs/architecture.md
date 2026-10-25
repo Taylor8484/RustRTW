@@ -104,6 +104,7 @@ differences are parameters on a `Ruleset`, not separate code paths per game.
   being hit, switching focus, keyboard control in both views, idle and
   blink animations. The entity position is simulated as well as the tile.
 - `sign` — sign texts on screen and their effect on the lights.
+- `block` — boxes and other pushables, box factories and transporters.
 - `md2` — Blitz's MD2 animation state, which the player code reads.
 - `pending` — stand-ins for the object families still to port (step 2.2).
 - `world` — `World::start` (`StartLevel`) and `World::step` (`UpdateGame`
@@ -129,7 +130,14 @@ pinned and upgraded deliberately.
 Behaviours that silently break a line-by-line translation:
 
 - Assigning a float to an int **rounds to nearest**; it does not truncate.
-- `And` / `Or` are bitwise and do not short-circuit; `True` is 1.
+- `And` / `Or` are bitwise and do not short-circuit; `True` is 1. `And`,
+  `Or` and `Xor` share one precedence level and group left to right, so
+  `a Or b And c` is `(a Or b) And c`. `Not` negates the whole chain after
+  it (checked in `compiler/parser.cpp`).
+- `For i=a To b` re-evaluates `b` on every pass, so loops that delete
+  entries and step `i` back see the shrinking count.
+- Locals start at 0 on every call, so a branch that leaves one unset
+  passes 0 on.
 - `Dim A(n)` has n+1 elements (0..=n). String functions are 1-based.
 - Undeclared variables are implicitly created with value 0 — a typo in the
   original is a new variable, not an error.

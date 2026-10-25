@@ -13,7 +13,8 @@
 
 use wonderland_formats::Level;
 
-use crate::pending::{Block, Item, Monster};
+use crate::block::{Block, Boxer, Transporter};
+use crate::pending::{Item, Monster};
 use crate::player::Player;
 use crate::setup::{LoadOptions, MonsterDir, Setup, Spawn};
 use crate::sign::{LEVEL_NAME, ShownSign};
@@ -95,6 +96,24 @@ pub enum Sound {
     Bounce(usize, i32),
     /// `SFXBreakAway`: a breakaway tile cracks.
     BreakAway,
+    /// `SFXBoxPush`.
+    BoxPush,
+    /// `SFXBoulderPush`: a boulder starts rolling.
+    BoulderPush,
+    /// `SFXBoulderHit`: a rolling boulder or link sphere stops.
+    BoulderHit,
+    /// `SFXBoxSplosh`: a box falls into water.
+    BoxSplosh,
+    /// `SFXLava`: a steel box sinks into lava.
+    Lava,
+    /// `SFXSticky`: two sticky cubes set.
+    Sticky,
+    /// `SFXBoxExplo`: a box breaks.
+    BoxExplode,
+    /// `SFXSingle(n)`, 0–16: sounds that play at most once per tick, at
+    /// the loudest volume asked for (1 cannon, 13 box factory; 12 is also
+    /// a prism breaking).
+    Single(i32),
     /// `SFXTime`: 30 seconds left.
     Time,
     /// `SFXCount(n)`: the last ten seconds.
@@ -211,8 +230,11 @@ pub struct World {
     pub level: Setup,
     /// Indexed by player id 1–4, as in the original; slot 0 is unused.
     pub players: Vec<Player>,
-    /// Boxes and other pushables, in creation order (2.2b).
+    /// Boxes and other pushables, in creation order.
     pub blocks: Vec<Block>,
+    /// Box factories.
+    pub boxers: Vec<Boxer>,
+    pub transporters: Vec<Transporter>,
     /// Monsters, in creation order (2.2c).
     pub monsters: Vec<Monster>,
     /// Coins, gates, clocks and bonus coins, in creation order (2.2d).
@@ -230,6 +252,9 @@ pub struct World {
     /// turn, turning towards `view3d_rotation * 100`.
     pub view3d_rotation2: i32,
     pub(crate) signs_shown: Vec<ShownSign>,
+    /// `SFXSingleVolume`: the loudest each single sound was asked for this
+    /// tick.
+    single_volume: [f32; 17],
     /// The keys held this tick; a bounce off a trampoline reads them.
     pub(crate) input: Input,
     pub camera: Camera,
@@ -282,6 +307,9 @@ impl World {
         let mut world = Self {
             players: vec![Player::default(); ruleset.players + 1],
             blocks: Vec::new(),
+            boxers: Vec::new(),
+            transporters: Vec::new(),
+            single_volume: [0.0; 17],
             monsters: Vec::new(),
             items: Vec::new(),
             conveyor_active: [true; 2],
@@ -343,7 +371,8 @@ impl World {
         world.lights.light_speed = 2;
         world.lights.ambient_speed = 1;
         // ConstructLevel builds the level mesh (step 3.1).
-        // 2.2e: CheckButtons(). 2.2b: BoxAlreadyInWater().
+        // 2.2e: CheckButtons().
+        world.box_already_in_water();
         let name = world.level.name.clone();
         world.start_sign(&name, 16.0, LEVEL_NAME, 0.0);
         Ok(world)
@@ -368,8 +397,15 @@ impl World {
     /// the camera looks at, full volume within 3. Measuring moves the
     /// camera there and back, which can leave float rounding behind.
     pub(crate) fn play_at(&mut self, sound: Sound, at: [f32; 3]) {
+        if let Some(volume) = self.hear(at) {
+            self.events.push(Event::SoundAt(sound, volume));
+        }
+    }
+
+    /// The volume of a sound at `at`, if it can be heard.
+    fn hear(&mut self, at: [f32; 3]) -> Option<f32> {
         if !self.options.sound {
-            return;
+            return None;
         }
         self.camera.translate(0.0, -10.0, 9.0);
         let [x, y, z] = self.camera.position;
@@ -378,10 +414,24 @@ impl World {
         self.camera.translate(0.0, 10.0, -9.0);
         let (a, b) = (3.0, 9.0);
         let volume: f32 = (b - distance) / (b - a);
-        if volume <= 0.0 {
+        (volume > 0.0).then(|| volume.min(1.0))
+    }
+
+    /// `PlaySingleSound`: asks for single sound `kind` from tile `(x, y)`
+    /// (x = -999 for full volume). It plays at the end of the tick.
+    pub(crate) fn play_single_sound(&mut self, x: i32, y: i32, kind: usize) {
+        if !self.options.sound {
             return;
         }
-        self.events.push(Event::SoundAt(sound, volume.min(1.0)));
+        let volume = if x == -999 {
+            1.0
+        } else {
+            match self.hear([x as f32 + 0.5, 0.0, -(y as f32) - 0.5]) {
+                Some(v) => v.max(self.single_volume[kind]),
+                None => return,
+            }
+        };
+        self.single_volume[kind] = volume;
     }
 
     /// The `Create*` calls, in load order.
@@ -395,6 +445,9 @@ impl World {
                         self.create_player(id, x, y);
                     }
                 }
+                Spawn::Box { x, y, kind } => self.create_box(x, y, kind),
+                Spawn::Transporter { x, y } => self.create_transporter(x, y),
+                Spawn::Boxer { x, y, kind } => self.create_boxer(x, y, kind),
                 Spawn::Monster {
                     dir: MonsterDir::Random,
                     x,
@@ -462,7 +515,7 @@ impl World {
         self.clock_ms += i64::from(self.ruleset.tick_ms);
         self.input = input;
 
-        // 2.2f: reset SFXSingleVolume.
+        self.single_volume = [0.0; 17];
         self.control(input);
         if self.focus_switch_timer > 0 {
             self.focus_switch_timer -= 1;
@@ -486,23 +539,29 @@ impl World {
         }
 
         self.convey_players();
-        // 2.2b: boxes standing on active conveyors move on.
+        self.convey_boxes();
         // 2.2f: ControlFireballs.
         for k in 1..self.players.len() {
             self.control_player(k);
         }
-        // 2.2b–f, in this order: ControlBoxes, ControlElectroTiles,
-        // ControlCannons, ControlSpikes, ControlTimerButtons,
-        // ControlMonsters, ControlItems, ControlFish, ControlParticles
-        // (renderer), ControlFireballs again, ControlBoxers, ControlWarpers.
+        self.control_boxes();
+        // 2.2c–f, in this order: ControlElectroTiles, ControlCannons,
+        // ControlSpikes, ControlTimerButtons, ControlMonsters, ControlItems,
+        // ControlFish, ControlParticles (renderer), ControlFireballs again.
+        self.control_boxers();
+        // 2.2c: ControlWarpers.
 
         self.move_players();
-        // 2.2b, 2.2c: transporter, box and monster movement.
-        // 2.2b: EndMoveTransporter, which goes before the players.
+        self.move_transporters();
+        self.move_boxes();
+        // 2.2c: monster movement.
+        // Transporters land first: a player may be riding one.
+        self.end_transporter_moves();
         self.end_player_moves();
-        // 2.2b, 2.2c: the end of box moves (with trampoline landings) and
-        // monster moves, then CleanUpBoxes, CleanUpFireballs,
-        // CleanUpMonsters, CleanUpItems.
+        self.end_box_moves();
+        // 2.2c: the end of monster moves.
+        self.clean_up_boxes();
+        // 2.2c, 2.2d, 2.2f: CleanUpFireballs, CleanUpMonsters, CleanUpItems.
 
         self.swoop_camera();
         // Water, conveyor and laser gate animation: renderer (step 3.2).
@@ -532,7 +591,12 @@ impl World {
                 }
             }
         }
-        // 2.2f: play the loudest single sounds.
+        for (i, &volume) in self.single_volume.iter().enumerate() {
+            if volume > 0.0 {
+                self.events
+                    .push(Event::SoundAt(Sound::Single(i as i32), volume));
+            }
+        }
         self.control_signs();
         self.weather();
         self.lights.update();

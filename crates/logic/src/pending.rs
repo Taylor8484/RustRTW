@@ -1,27 +1,13 @@
-//! The other object families as far as the player code needs them, until
-//! steps 2.2b–f port them. Each step moves its part out of this file.
+//! The other object families as far as the ported code needs them, until
+//! steps 2.2c–f port them. Each step moves its part out of this file.
 //!
-//! The object lists stay empty for now, so the calls that act on a listed
-//! object cannot be reached yet. The tile-driven calls (buttons, teleporters,
-//! transporters) can be: they do nothing until their family exists, so a
-//! level that uses them does not play like the original yet.
+//! The monster and item lists stay empty for now, so the calls that act on
+//! one of them cannot be reached yet. The others can: buttons and
+//! teleporters are driven by tiles, and push cannons fire fireballs. They
+//! do nothing until their family exists, so a level that uses them does
+//! not play like the original yet.
 
 use crate::World;
-
-/// A box, push cannon, sticky cube or link sphere (the `Box*` arrays).
-/// Step 2.2b adds the rest.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Block {
-    pub x: i32,
-    pub y: i32,
-    pub x2: i32,
-    pub y2: i32,
-    pub moving: bool,
-    pub moving_x: i32,
-    pub moving_y: i32,
-    /// `BoxType`.
-    pub kind: i32,
-}
 
 /// The `Monster*` arrays. Step 2.2c adds the rest.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -31,6 +17,10 @@ pub struct Monster {
     pub x2: i32,
     pub y2: i32,
     pub moving: bool,
+    pub moving_timer: i32,
+    pub speed: i32,
+    pub dead: bool,
+    pub dying: bool,
     /// `MonsterType`.
     pub kind: i32,
 }
@@ -40,34 +30,11 @@ pub struct Monster {
 pub struct Item {
     pub x: i32,
     pub y: i32,
+    /// `ItemType`: 0 coin, 1 exit gate, 2 clock, 3 bonus coin.
+    pub kind: i32,
 }
 
 impl World {
-    /// 2.2b: `CanBoxMove`.
-    pub(crate) fn can_box_move(&mut self, _i: usize, _dx: i32, _dy: i32) -> bool {
-        unreachable!("2.2b: no boxes are created yet")
-    }
-
-    /// 2.2b: `MoveBox`.
-    pub(crate) fn move_box(&mut self, _i: usize, _dx: i32, _dy: i32, _speed: i32) {
-        unreachable!("2.2b: no boxes are created yet")
-    }
-
-    /// 2.2b: `KillBox`.
-    pub(crate) fn kill_box(&mut self, _i: usize) {
-        unreachable!("2.2b: no boxes are created yet")
-    }
-
-    /// 2.2b: `CanTransporterMove`. No transporters exist yet.
-    pub(crate) fn can_transporter_move(&mut self, _x: i32, _y: i32, _dx: i32, _dy: i32) -> bool {
-        false
-    }
-
-    /// 2.2b: `MoveTransporter`.
-    pub(crate) fn move_transporter(&mut self, _x: i32, _y: i32, _dx: i32, _dy: i32) {
-        unreachable!("2.2b: no transporters are created yet")
-    }
-
     /// 2.2c: `CanMonsterMove`.
     pub(crate) fn can_monster_move(&mut self, _i: usize, _dx: i32, _dy: i32) -> bool {
         unreachable!("2.2c: no monsters are created yet")
@@ -105,4 +72,24 @@ impl World {
     ) -> bool {
         false
     }
+
+    /// 2.2e: `BoxStepOnTeleporter`; true if the box was sent on.
+    pub(crate) fn box_step_on_teleporter(
+        &mut self,
+        _i: usize,
+        _x: i32,
+        _y: i32,
+        _dx: i32,
+        _dy: i32,
+    ) -> bool {
+        false
+    }
+
+    /// 2.2f: `NofFireballs`.
+    pub(crate) fn fireball_count(&self) -> usize {
+        0
+    }
+
+    /// 2.2f: `CreateFireball`. Push cannons fire into nothing for now.
+    pub(crate) fn create_fireball(&mut self, _x: i32, _y: i32, _dx: i32, _dy: i32) {}
 }

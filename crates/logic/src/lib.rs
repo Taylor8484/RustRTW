@@ -9,6 +9,7 @@
 //! ([`BlitzRng`]) drawn in the same order, including the draws made only for
 //! particles and lighting effects.
 
+pub mod block;
 pub mod clock;
 pub mod grid;
 pub mod input;
@@ -21,10 +22,11 @@ pub mod setup;
 pub mod sign;
 pub mod world;
 
+pub use block::{Block, Boxer, Transporter};
 pub use clock::{Clock, Frame};
 pub use grid::Grid;
 pub use input::Input;
-pub use pending::{Block, Item, Monster};
+pub use pending::{Item, Monster};
 pub use player::{Player, Skin};
 pub use rng::BlitzRng;
 pub use ruleset::Ruleset;
