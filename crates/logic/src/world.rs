@@ -1,9 +1,10 @@
 //! The running level: `StartLevel`, `UpdateGame` and the per-frame timer in
 //! `MainGameLoop` (`RTWP/game.bb`).
 //!
-//! [`World::step`] runs one tick in `UpdateGame`'s order. The object
-//! families (players, boxes, monsters, items, switches and the rest) arrive
-//! in steps 2.2a–f; comments in `step` mark where each slots in.
+//! [`World::step`] runs one tick in `UpdateGame`'s order. The players are
+//! in [`crate::player`] and the signs in [`crate::sign`]; the other object
+//! families (boxes, monsters, items, switches and the rest) arrive in steps
+//! 2.2b–f, and comments in `step` mark where each slots in.
 //!
 //! The camera and lights live here too: the original moves them by fixed
 //! amounts each tick and draws random numbers for the lightning, so the
@@ -12,7 +13,10 @@
 
 use wonderland_formats::Level;
 
+use crate::pending::{Block, Item, Monster};
+use crate::player::Player;
 use crate::setup::{LoadOptions, MonsterDir, Setup, Spawn};
+use crate::sign::{LEVEL_NAME, ShownSign};
 use crate::{BlitzRng, Input, Result, Ruleset};
 
 /// Settings from `options.cfg` and the menus that change the simulation.
@@ -23,6 +27,10 @@ pub struct Options {
     pub detail_level: i32,
     /// `NoTimeLimit`: the level timer never runs out.
     pub no_time_limit: bool,
+    /// Sound is on (`OptionsSoundLevel` above 0 and a sound device). Each
+    /// positional sound then nudges the camera by float rounding, so it
+    /// can change the free camera's limits.
+    pub sound: bool,
     pub load: LoadOptions,
 }
 
@@ -31,6 +39,7 @@ impl Default for Options {
         Self {
             detail_level: 3,
             no_time_limit: false,
+            sound: true,
             load: LoadOptions {
                 style: None,
                 background: None,
@@ -65,8 +74,27 @@ pub enum Completion {
 /// Sounds the simulation asks for. The game crate maps them to files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sound {
-    /// `SFXTalk(n)`: a player's greeting at level start.
+    /// `SFXTalk(n)`: a player's greeting at level start (0–7), or the
+    /// player taking over on a switch (11–14).
     Talk(i32),
+    /// `SFXDeath`: the first player of the level is hit.
+    Death,
+    /// `SFXTeleport`: also played when the focus moves to a dying player.
+    Teleport,
+    /// `SFXIce`: setting off on ice.
+    Ice,
+    /// `SFXSlIce(n)`, 0–4, played at pitch 19000: sliding onto ice.
+    SlideIce(i32),
+    /// `SFXPlayerConvey(player)`: a player rides onto a conveyor.
+    Convey(usize),
+    /// `SFXTransporter`.
+    Transporter,
+    /// `SFXTrampoline`.
+    Trampoline,
+    /// `SFXpBounce(player, n)`, n 1–4.
+    Bounce(usize, i32),
+    /// `SFXBreakAway`: a breakaway tile cracks.
+    BreakAway,
     /// `SFXTime`: 30 seconds left.
     Time,
     /// `SFXCount(n)`: the last ten seconds.
@@ -93,30 +121,19 @@ pub enum LoseSound {
 }
 
 /// Something the renderer or audio should react to this tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Event {
     Sound(Sound),
-    /// A dying player finished spinning: hide them and burst into particles.
+    /// `PlayMySound` at an entity: the volume (0–1] fades with distance
+    /// from the camera, before the sound level is applied.
+    SoundAt(Sound, f32),
+    /// A dying player finished spinning: burst into particles.
     PlayerExploded(usize),
-}
-
-/// The core of a player slot. Step 2.2a adds the rest of the player state.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Player {
-    pub exists: bool,
-    /// Current tile.
-    pub x: i32,
-    pub y: i32,
-    pub moving: bool,
-    /// Spinning upwards after being hit.
-    pub dying: bool,
-    pub dying_timer: i32,
-    /// Exploded; the level restarts when `dying_timer` runs out.
-    pub dead: bool,
-    /// `FocusOnPlayer`: the player under control.
-    pub focus: bool,
-    /// Ticks left of shrinking into a rainbow gate.
-    pub shrink: i32,
+    /// A tile changed under a player or object (switcher, breakaway).
+    TileChanged {
+        x: i32,
+        y: i32,
+    },
 }
 
 /// The camera in Blitz coordinates (x right, y up, z = -row).
@@ -194,6 +211,27 @@ pub struct World {
     pub level: Setup,
     /// Indexed by player id 1–4, as in the original; slot 0 is unused.
     pub players: Vec<Player>,
+    /// Boxes and other pushables, in creation order (2.2b).
+    pub blocks: Vec<Block>,
+    /// Monsters, in creation order (2.2c).
+    pub monsters: Vec<Monster>,
+    /// Coins, gates, clocks and bonus coins, in creation order (2.2d).
+    pub items: Vec<Item>,
+    /// `ConveyorActive(1)` and `(2)`: conveyor tiles 5x0–5x7 and 5x8 up.
+    pub conveyor_active: [bool; 2],
+    /// `BothCompleted`: bit `k - 1` is set once player `k` has left through
+    /// the exit.
+    pub both_completed: i32,
+    /// `EndMovePlayerTrampoline`: the move ending is a jump landing.
+    pub end_move_trampoline: bool,
+    /// `View3dRotation`: the first-person heading in quarter turns.
+    pub view3d_rotation: i32,
+    /// `View3dRotation2`: the camera's heading in hundredths of a quarter
+    /// turn, turning towards `view3d_rotation * 100`.
+    pub view3d_rotation2: i32,
+    pub(crate) signs_shown: Vec<ShownSign>,
+    /// The keys held this tick; a bounce off a trampoline reads them.
+    pub(crate) input: Input,
     pub camera: Camera,
     pub lights: Lights,
     /// `LevelTimer`: ticks since the level started.
@@ -218,7 +256,7 @@ pub struct World {
     pub free_camera: [f32; 2],
     /// `CameraDX`, `CameraDZ`: a camera swoop still to do.
     pub camera_swoop: [f32; 2],
-    events: Vec<Event>,
+    pub(crate) events: Vec<Event>,
 }
 
 /// `CameraDStep`: the most a camera swoop moves per tick.
@@ -233,27 +271,26 @@ impl World {
         session: Session,
     ) -> Result<Self> {
         let setup = Setup::load(level, &ruleset, options.load)?;
-        let lightning = i32::from(setup.weather.lightning);
-        let channel = |on: bool, lit: i32| if on { lit } else { 100 };
-        let ch = setup.channels;
         let lights = Lights {
             light: [-255; 3],
-            light_target: [
-                channel(ch.red, 255 - 155 * lightning),
-                channel(ch.green, 255 - 155 * lightning),
-                channel(ch.blue, 255),
-            ],
+            light_target: [0; 3],
             light_speed: 2,
             ambient: [0; 3],
-            ambient_target: [
-                channel(ch.red, 255 - 155 * lightning),
-                channel(ch.green, 255 - 155 * lightning),
-                channel(ch.blue, 255),
-            ],
+            ambient_target: [0; 3],
             ambient_speed: 1,
         };
         let mut world = Self {
             players: vec![Player::default(); ruleset.players + 1],
+            blocks: Vec::new(),
+            monsters: Vec::new(),
+            items: Vec::new(),
+            conveyor_active: [true; 2],
+            both_completed: 0,
+            end_move_trampoline: false,
+            view3d_rotation: 0,
+            view3d_rotation2: 0,
+            signs_shown: Vec::new(),
+            input: Input::default(),
             camera: Camera {
                 position: [0.0; 3],
                 pitch: 0.0,
@@ -291,13 +328,60 @@ impl World {
             world.camera.yaw = 180.0;
             world.camera.near = 0.18;
             world.camera.zoom = 1.0;
+            world.view3d_rotation = 2;
+            world.view3d_rotation2 = 200;
+            for p in &mut world.players[1..] {
+                p.view3d_rotation = 2;
+            }
         } else {
             world.camera.pitch = 90.0;
         }
+        // A sign under the first player keeps its dimmed lights.
+        if world.sign_active == 0 {
+            world.level_light_targets();
+        }
+        world.lights.light_speed = 2;
+        world.lights.ambient_speed = 1;
         // ConstructLevel builds the level mesh (step 3.1).
         // 2.2e: CheckButtons(). 2.2b: BoxAlreadyInWater().
-        // 2.2f: StartSign(MapName$, 16, 10, 0).
+        let name = world.level.name.clone();
+        world.start_sign(&name, 16.0, LEVEL_NAME, 0.0);
         Ok(world)
+    }
+
+    /// The light targets for the level as it starts, outside lightning
+    /// flashes and signs. Lightning levels are darker.
+    pub(crate) fn level_light_targets(&mut self) {
+        let lightning = i32::from(self.level.weather.lightning);
+        let ch = self.level.channels;
+        let channel = |on: bool, lit: i32| if on { lit } else { 100 };
+        let targets = [
+            channel(ch.red, 255 - 155 * lightning),
+            channel(ch.green, 255 - 155 * lightning),
+            channel(ch.blue, 255),
+        ];
+        self.lights.light_target = targets;
+        self.lights.ambient_target = targets;
+    }
+
+    /// `PlayMySound` at a position: no sound beyond 9 units of the point
+    /// the camera looks at, full volume within 3. Measuring moves the
+    /// camera there and back, which can leave float rounding behind.
+    pub(crate) fn play_at(&mut self, sound: Sound, at: [f32; 3]) {
+        if !self.options.sound {
+            return;
+        }
+        self.camera.translate(0.0, -10.0, 9.0);
+        let [x, y, z] = self.camera.position;
+        let (dx, dy, dz) = (at[0] - x, at[1] - y, at[2] - z);
+        let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+        self.camera.translate(0.0, 10.0, -9.0);
+        let (a, b) = (3.0, 9.0);
+        let volume: f32 = (b - distance) / (b - a);
+        if volume <= 0.0 {
+            return;
+        }
+        self.events.push(Event::SoundAt(sound, volume.min(1.0)));
     }
 
     /// The `Create*` calls, in load order.
@@ -305,17 +389,10 @@ impl World {
         for i in 0..self.level.spawns.len() {
             match self.level.spawns[i] {
                 Spawn::Player { id, x, y } => {
-                    // The logic half of CreatePlayer; 2.2a ports the rest.
-                    if let Some(p) = usize::try_from(id)
-                        .ok()
-                        .and_then(|id| self.players.get_mut(id))
+                    if let Ok(id @ 1..) = usize::try_from(id)
+                        && id < self.players.len()
                     {
-                        *p = Player {
-                            exists: true,
-                            x,
-                            y,
-                            ..Player::default()
-                        };
+                        self.create_player(id, x, y);
                     }
                 }
                 Spawn::Monster {
@@ -355,7 +432,8 @@ impl World {
         } else {
             [x + 0.5, 10.4 + 10.0, -y - 9.5 + 10.0]
         };
-        // 2.2f: StartSign for a sign under the player.
+        self.sign_active = 0;
+        self.start_signs_under(k);
         Ok(())
     }
 
@@ -382,6 +460,7 @@ impl World {
     pub fn step(&mut self, input: Input) {
         self.events.clear();
         self.clock_ms += i64::from(self.ruleset.tick_ms);
+        self.input = input;
 
         // 2.2f: reset SFXSingleVolume.
         self.control(input);
@@ -389,25 +468,40 @@ impl World {
             self.focus_switch_timer -= 1;
         }
         for i in 1..self.players.len() {
-            // 2.2a: walk animation end, blinking and idle animations (these
-            // draw random numbers).
+            self.idle_and_blink(i);
             self.update_dying(i);
         }
         if self.level_timer < 160 {
             // Fade in.
             self.camera.translate(0.0, -10.0 / 160.0, -10.0 / 160.0);
             self.camera.pitch += -35.0 / 160.0;
+            if self.level_timer > 150 && self.level.view3d {
+                // First person: the camera is now inside the player.
+                for p in &mut self.players[1..] {
+                    if p.focus && p.exists {
+                        p.hidden = true;
+                    }
+                }
+            }
         }
 
-        // 2.2b: players and boxes standing on active conveyors move on.
-        // 2.2a–f, in this order: ControlFireballs, ControlPlayer (1–4),
-        // ControlBoxes, ControlElectroTiles, ControlCannons, ControlSpikes,
-        // ControlTimerButtons, ControlMonsters, ControlItems, ControlFish,
-        // ControlParticles (renderer), ControlFireballs again,
-        // ControlBoxers, ControlWarpers.
-        // Then object movement (players, transporters, boxes, monsters), the
-        // end of moves (transporters first, then players with trampoline
-        // landings, boxes, monsters) and CleanUpBoxes, CleanUpFireballs,
+        self.convey_players();
+        // 2.2b: boxes standing on active conveyors move on.
+        // 2.2f: ControlFireballs.
+        for k in 1..self.players.len() {
+            self.control_player(k);
+        }
+        // 2.2b–f, in this order: ControlBoxes, ControlElectroTiles,
+        // ControlCannons, ControlSpikes, ControlTimerButtons,
+        // ControlMonsters, ControlItems, ControlFish, ControlParticles
+        // (renderer), ControlFireballs again, ControlBoxers, ControlWarpers.
+
+        self.move_players();
+        // 2.2b, 2.2c: transporter, box and monster movement.
+        // 2.2b: EndMoveTransporter, which goes before the players.
+        self.end_player_moves();
+        // 2.2b, 2.2c: the end of box moves (with trampoline landings) and
+        // monster moves, then CleanUpBoxes, CleanUpFireballs,
         // CleanUpMonsters, CleanUpItems.
 
         self.swoop_camera();
@@ -431,13 +525,20 @@ impl World {
         }
         for p in &mut self.players[1..] {
             if p.shrink > 0 {
+                // The renderer scales the player by shrink / 60.
                 p.shrink -= 1;
+                if p.shrink == 0 {
+                    p.hidden = true;
+                }
             }
         }
-        // 2.2f: play the loudest single sounds, then ControlSigns.
+        // 2.2f: play the loudest single sounds.
+        self.control_signs();
         self.weather();
         self.lights.update();
         self.level_timer += 1;
+        // UpdateWorld.
+        self.animate_players();
 
         self.count_down();
     }
@@ -445,7 +546,9 @@ impl World {
     /// The input half of `UpdateGame`: free camera or player control.
     fn control(&mut self, input: Input) {
         if input.camera && !self.level.view3d {
-            // 2.2f: on entering, StopSign(11..30).
+            if !self.free_camera_active {
+                self.stop_level_signs();
+            }
             self.free_camera_active = true;
             let step = 0.1;
             let width = self.level.grid.width() as f32;
@@ -470,7 +573,9 @@ impl World {
             return;
         }
 
-        // 2.2f: on leaving the free camera, CheckSigns().
+        if self.free_camera_active {
+            self.check_signs();
+        }
         self.free_camera_active = false;
         let [fx, fz] = self.free_camera;
         if fx != 0.0 || fz != 0.0 {
@@ -482,13 +587,16 @@ impl World {
             && self.completion == Completion::Playing
             && self.focus_switch_timer < 20
         {
-            // 2.2a/b: NormalKeyboardControl, or View3dKeyboardControl in
-            // first person.
+            if self.level.view3d {
+                self.view3d_keyboard_control(input);
+            } else {
+                self.normal_keyboard_control(input);
+            }
         }
         if input.switch && self.focus_switch_timer == 0 {
             let blocked = self.players.iter().any(|p| p.exists && (p.dying || p.dead));
             if !blocked {
-                // 2.2a: SwitchPlayer(1).
+                self.switch_player(true);
             }
         }
     }
@@ -497,8 +605,9 @@ impl World {
     fn update_dying(&mut self, i: usize) {
         let p = &self.players[i];
         if p.dying && !p.dead && p.exists {
-            // The renderer lifts and spins the player by the same amount.
+            // The renderer spins the player by (4, 6) degrees per tick.
             let lift = self.players[i].dying_timer as f32 / 2000.0;
+            self.players[i].position[1] += lift;
             self.camera.translate(0.0, lift, 0.0);
             let p = &mut self.players[i];
             p.dying_timer -= 1;
@@ -513,6 +622,7 @@ impl World {
                 if !others_dead {
                     self.lose_sound();
                 }
+                self.players[i].hidden = true;
                 self.events.push(Event::PlayerExploded(i));
                 // 30*DetailLevel+1 particles, each drawing an angle, a speed,
                 // a texture and a vertical speed.
@@ -666,7 +776,7 @@ impl World {
             self.map_ms = self.clock_ms;
         }
         if self.map_time < 0 {
-            // 2.2a: KillPlayer for every existing player.
+            self.kill_players();
             self.map_time = 0;
         }
     }

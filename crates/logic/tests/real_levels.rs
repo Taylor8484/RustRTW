@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use wonderland_formats::{Game, GameAssets, Level};
-use wonderland_logic::{Input, Options, Ruleset, Session, World};
+use wonderland_logic::{BlitzRng, Input, Options, Player, Ruleset, Session, World};
 
 #[test]
 fn every_rtwp_level_starts_and_runs() {
@@ -28,21 +28,58 @@ fn every_rtwp_level_starts_and_runs() {
         .collect();
     assert_eq!(names.len(), 85 + 71);
 
+    // Held keys that change every 13 ticks: arrows, and now and then the
+    // free camera or a player switch.
+    let mut keys = BlitzRng::new(7);
+    let inputs: Vec<Input> = (0..3000 / 13 + 1)
+        .flat_map(|_| {
+            let bits = keys.rand(0, 15) as u8 | (u8::from(keys.rand(0, 9) == 0) << keys.rand(4, 5));
+            [Input::from_bits(bits); 13]
+        })
+        .take(3000)
+        .collect();
+
     // One session across all levels, as when playing them in a row.
     let mut session = Session::default();
+    let mut walked = 0;
     for name in names {
         let level = Level::parse(&assets.read(&name).unwrap(), Game::Rtwp).unwrap();
         let mut world = World::start(&level, Ruleset::rtwp(), Options::default(), session)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let start = world.players.clone();
         let replay = world.clone();
-        for t in 0..1000u32 {
-            world.step(Input::from_bits((t / 13 % 16) as u8));
+        for &input in &inputs {
+            world.step(input);
         }
         let mut again = replay;
-        for t in 0..1000u32 {
-            again.step(Input::from_bits((t / 13 % 16) as u8));
+        for &input in &inputs {
+            again.step(input);
         }
         assert_eq!(world, again, "{name}: not deterministic");
+        let moved = |(a, b): (&Player, &Player)| (a.x, a.y) != (b.x, b.y);
+        if world.players.iter().zip(&start).any(moved) {
+            walked += 1;
+        }
         session = world.into_session();
+    }
+    eprintln!("{walked} levels saw a player move");
+    assert!(walked > 120, "only {walked} levels saw a player move");
+}
+
+#[test]
+fn player_models_have_the_frames_the_animations_assume() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/RTWP");
+    if !dir.is_dir() {
+        eprintln!("skipping: {} not found", dir.display());
+        return;
+    }
+    let assets = GameAssets::open(&dir).unwrap();
+    for name in [r"graphics\stinky.md2", r"graphics\peegueb.md2"] {
+        let model = wonderland_formats::mesh::md2::parse(&assets.read(name).unwrap()).unwrap();
+        assert_eq!(
+            model.frames.len() as i32,
+            wonderland_logic::player::FRAMES,
+            "{name}"
+        );
     }
 }

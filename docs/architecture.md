@@ -100,6 +100,12 @@ differences are parameters on a `Ruleset`, not separate code paths per game.
 - `setup` — what the loaders do after reading a level: tile rewrites, sign
   positions, the electro map, and the `Create*` calls as an ordered `Spawn`
   list.
+- `player` — the players: walking, pushing, ice, conveyors, trampolines,
+  being hit, switching focus, keyboard control in both views, idle and
+  blink animations. The entity position is simulated as well as the tile.
+- `sign` — sign texts on screen and their effect on the lights.
+- `md2` — Blitz's MD2 animation state, which the player code reads.
+- `pending` — stand-ins for the object families still to port (step 2.2).
 - `world` — `World::start` (`StartLevel`) and `World::step` (`UpdateGame`
   plus the frame's time-limit check). The camera and lights are simulated
   here, because the original moves them per tick. `Session` carries the

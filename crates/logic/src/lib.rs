@@ -12,14 +12,20 @@
 pub mod clock;
 pub mod grid;
 pub mod input;
+pub mod md2;
+mod pending;
+pub mod player;
 pub mod rng;
 pub mod ruleset;
 pub mod setup;
+pub mod sign;
 pub mod world;
 
 pub use clock::{Clock, Frame};
 pub use grid::Grid;
 pub use input::Input;
+pub use pending::{Block, Item, Monster};
+pub use player::{Player, Skin};
 pub use rng::BlitzRng;
 pub use ruleset::Ruleset;
 pub use setup::{Setup, Spawn};
