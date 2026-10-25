@@ -92,6 +92,20 @@ timing (a tile move takes `BaseSpeed = 24` ticks). Input is a stream of
 commands, output is state — no rendering, no wall clock. Per-game behaviour
 differences are parameters on a `Ruleset`, not separate code paths per game.
 
+- `rng` — `BlitzRng`, Blitz3D's Park–Miller generator. Matching the
+  originals means drawing from it in the same order, including draws that
+  only feed particles and lighting (`skip`).
+- `clock` — one tick is `TweenPeriod = 1000/85` = 11 ms. A frame runs at most
+  20 ticks and the game crate interpolates with the remainder.
+- `setup` — what the loaders do after reading a level: tile rewrites, sign
+  positions, the electro map, and the `Create*` calls as an ordered `Spawn`
+  list.
+- `world` — `World::start` (`StartLevel`) and `World::step` (`UpdateGame`
+  plus the frame's time-limit check). The camera and lights are simulated
+  here, because the original moves them per tick. `Session` carries the
+  generator and other cross-level state into the next level or a restart.
+  Events (sounds, explosions) are returned per tick.
+
 ### campaign
 
 How levels are sequenced and unlocked: TOW's world list, RTWP's worlds plus
@@ -114,6 +128,8 @@ Behaviours that silently break a line-by-line translation:
 - Undeclared variables are implicitly created with value 0 — a typo in the
   original is a new variable, not an error.
 - Reading past end of file returns zeros rather than failing.
+- Function arguments evaluate left to right, which fixes the order of
+  random draws in calls like `CreateParticle(..., Rnd(), Rnd())`.
 
 ## Verification
 

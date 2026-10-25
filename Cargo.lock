@@ -221,6 +221,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "wonderland-logic"
+version = "0.1.0"
+dependencies = [
+ "wonderland-formats",
+]
+
+[[package]]
 name = "xmrs"
 version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

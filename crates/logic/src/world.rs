@@ -1,0 +1,844 @@
+//! The running level: `StartLevel`, `UpdateGame` and the per-frame timer in
+//! `MainGameLoop` (`RTWP/game.bb`).
+//!
+//! [`World::step`] runs one tick in `UpdateGame`'s order. The object
+//! families (players, boxes, monsters, items, switches and the rest) arrive
+//! in steps 2.2a–f; comments in `step` mark where each slots in.
+//!
+//! The camera and lights live here too: the original moves them by fixed
+//! amounts each tick and draws random numbers for the lightning, so the
+//! renderer only reads them. Particles are left to the renderer, but their
+//! random draws are made here so the generator stays in step.
+
+use wonderland_formats::Level;
+
+use crate::setup::{LoadOptions, MonsterDir, Setup, Spawn};
+use crate::{BlitzRng, Input, Result, Ruleset};
+
+/// Settings from `options.cfg` and the menus that change the simulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// `DetailLevel`, 1–5. It sets how many particles effects create, and
+    /// each particle draws random numbers, so it changes the random sequence.
+    pub detail_level: i32,
+    /// `NoTimeLimit`: the level timer never runs out.
+    pub no_time_limit: bool,
+    pub load: LoadOptions,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            detail_level: 3,
+            no_time_limit: false,
+            load: LoadOptions {
+                style: None,
+                background: None,
+            },
+        }
+    }
+}
+
+/// State that outlives a level: the next level or a restart picks it up.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Session {
+    pub rng: BlitzRng,
+    /// `ClassicDeathSound`: deaths so far. The first two always play the
+    /// classic sound.
+    pub classic_death_sound: i32,
+}
+
+/// `LevelCompleted`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Completion {
+    /// 0: playing.
+    #[default]
+    Playing,
+    /// 1: won, zooming out.
+    Won,
+    /// 2: done, back to the menu (and on to the next level).
+    Done,
+    /// 3: restart the level.
+    Restart,
+}
+
+/// Sounds the simulation asks for. The game crate maps them to files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sound {
+    /// `SFXTalk(n)`: a player's greeting at level start.
+    Talk(i32),
+    /// `SFXTime`: 30 seconds left.
+    Time,
+    /// `SFXCount(n)`: the last ten seconds.
+    Count(i32),
+    /// `SFXLightning(n)`.
+    Lightning(i32),
+    /// `SFXLevelLose`: the level is lost.
+    Lose(LoseSound),
+}
+
+/// The level-lost sound, picked when the last player dies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoseSound {
+    /// `sound\death2.wav`
+    Classic,
+    /// `newsounds\death-2b.wav` to `death-2d.wav`
+    Variant(char),
+    /// `newsounds\death2-spa.wav`
+    Spanish,
+    /// `newsounds\death2-ger.wav`
+    German,
+    /// `newsounds\death2-fra.wav`
+    French,
+}
+
+/// Something the renderer or audio should react to this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event {
+    Sound(Sound),
+    /// A dying player finished spinning: hide them and burst into particles.
+    PlayerExploded(usize),
+}
+
+/// The core of a player slot. Step 2.2a adds the rest of the player state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Player {
+    pub exists: bool,
+    /// Current tile.
+    pub x: i32,
+    pub y: i32,
+    pub moving: bool,
+    /// Spinning upwards after being hit.
+    pub dying: bool,
+    pub dying_timer: i32,
+    /// Exploded; the level restarts when `dying_timer` runs out.
+    pub dead: bool,
+    /// `FocusOnPlayer`: the player under control.
+    pub focus: bool,
+    /// Ticks left of shrinking into a rainbow gate.
+    pub shrink: i32,
+}
+
+/// The camera in Blitz coordinates (x right, y up, z = -row).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Camera {
+    pub position: [f32; 3],
+    pub pitch: f32,
+    pub yaw: f32,
+    /// `CameraRange` near plane; the far plane is always 140.
+    pub near: f32,
+    /// `CameraZoom`.
+    pub zoom: f32,
+}
+
+impl Camera {
+    fn translate(&mut self, dx: f32, dy: f32, dz: f32) {
+        self.position[0] += dx;
+        self.position[1] += dy;
+        self.position[2] += dz;
+    }
+}
+
+/// The level light and ambient light, fading towards targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Lights {
+    pub light: [i32; 3],
+    pub light_target: [i32; 3],
+    pub light_speed: i32,
+    pub ambient: [i32; 3],
+    pub ambient_target: [i32; 3],
+    pub ambient_speed: i32,
+}
+
+impl Lights {
+    fn fade_out(&mut self) {
+        self.light_target = [-255; 3];
+        self.light_speed = 2;
+        self.ambient_target = [0; 3];
+        self.ambient_speed = 1;
+    }
+
+    fn approach(current: &mut i32, target: i32, speed: i32) {
+        if *current < target - speed {
+            *current += speed;
+        } else if *current < target {
+            *current = target;
+        }
+        if *current > target + speed {
+            *current -= speed;
+        } else if *current > target {
+            *current = target;
+        }
+    }
+
+    fn update(&mut self) {
+        for c in 0..3 {
+            Self::approach(&mut self.light[c], self.light_target[c], self.light_speed);
+        }
+        for c in 0..3 {
+            Self::approach(
+                &mut self.ambient[c],
+                self.ambient_target[c],
+                self.ambient_speed,
+            );
+        }
+    }
+}
+
+/// A level in play.
+#[derive(Debug, Clone, PartialEq)]
+pub struct World {
+    pub ruleset: Ruleset,
+    pub options: Options,
+    pub session: Session,
+    pub level: Setup,
+    /// Indexed by player id 1–4, as in the original; slot 0 is unused.
+    pub players: Vec<Player>,
+    pub camera: Camera,
+    pub lights: Lights,
+    /// `LevelTimer`: ticks since the level started.
+    pub level_timer: i32,
+    pub completion: Completion,
+    pub completion_timer: i32,
+    /// `MapTime`: seconds left.
+    pub map_time: i32,
+    /// Simulated `MilliSecs()`: `tick_ms` per tick since the level started.
+    pub clock_ms: i64,
+    /// `MapMilliTime`: when `map_time` last ticked down.
+    pub map_ms: i64,
+    pub focus_switch_timer: i32,
+    pub lightning_timer: i32,
+    /// `SignActive`: 0, or the sign being shown on a player.
+    pub sign_active: i32,
+    /// Ticks left of the final gate sinking.
+    pub final_gate_anim: i32,
+    /// `ShiftKeyPressed`: in free-camera mode last tick.
+    pub free_camera_active: bool,
+    /// `FreeCameraX`, `FreeCameraZ`: how far the free camera has moved.
+    pub free_camera: [f32; 2],
+    /// `CameraDX`, `CameraDZ`: a camera swoop still to do.
+    pub camera_swoop: [f32; 2],
+    events: Vec<Event>,
+}
+
+/// `CameraDStep`: the most a camera swoop moves per tick.
+const CAMERA_STEP: f32 = 0.5;
+
+impl World {
+    /// `StartLevel`: loads `level` and creates its objects.
+    pub fn start(
+        level: &Level,
+        ruleset: Ruleset,
+        options: Options,
+        session: Session,
+    ) -> Result<Self> {
+        let setup = Setup::load(level, &ruleset, options.load)?;
+        let lightning = i32::from(setup.weather.lightning);
+        let channel = |on: bool, lit: i32| if on { lit } else { 100 };
+        let ch = setup.channels;
+        let lights = Lights {
+            light: [-255; 3],
+            light_target: [
+                channel(ch.red, 255 - 155 * lightning),
+                channel(ch.green, 255 - 155 * lightning),
+                channel(ch.blue, 255),
+            ],
+            light_speed: 2,
+            ambient: [0; 3],
+            ambient_target: [
+                channel(ch.red, 255 - 155 * lightning),
+                channel(ch.green, 255 - 155 * lightning),
+                channel(ch.blue, 255),
+            ],
+            ambient_speed: 1,
+        };
+        let mut world = Self {
+            players: vec![Player::default(); ruleset.players + 1],
+            camera: Camera {
+                position: [0.0; 3],
+                pitch: 0.0,
+                yaw: 0.0,
+                near: 0.98,
+                zoom: 2.0,
+            },
+            lights,
+            level_timer: 0,
+            completion: Completion::Playing,
+            completion_timer: 0,
+            map_time: setup.time,
+            clock_ms: 0,
+            // StartLevel sets TweenTime one period before MapMilliTime.
+            map_ms: i64::from(ruleset.tick_ms),
+            focus_switch_timer: 0,
+            lightning_timer: 0,
+            sign_active: 0,
+            final_gate_anim: 0,
+            free_camera_active: false,
+            free_camera: [0.0; 2],
+            camera_swoop: [0.0; 2],
+            events: Vec::new(),
+            level: setup,
+            ruleset,
+            options,
+            session,
+        };
+        world.create_objects();
+        world.focus_first_player()?;
+
+        // StartLevel, after LoadLevel.
+        if world.level.view3d {
+            world.camera.pitch = 38.0;
+            world.camera.yaw = 180.0;
+            world.camera.near = 0.18;
+            world.camera.zoom = 1.0;
+        } else {
+            world.camera.pitch = 90.0;
+        }
+        // ConstructLevel builds the level mesh (step 3.1).
+        // 2.2e: CheckButtons(). 2.2b: BoxAlreadyInWater().
+        // 2.2f: StartSign(MapName$, 16, 10, 0).
+        Ok(world)
+    }
+
+    /// The `Create*` calls, in load order.
+    fn create_objects(&mut self) {
+        for i in 0..self.level.spawns.len() {
+            match self.level.spawns[i] {
+                Spawn::Player { id, x, y } => {
+                    // The logic half of CreatePlayer; 2.2a ports the rest.
+                    if let Some(p) = usize::try_from(id)
+                        .ok()
+                        .and_then(|id| self.players.get_mut(id))
+                    {
+                        *p = Player {
+                            exists: true,
+                            x,
+                            y,
+                            ..Player::default()
+                        };
+                    }
+                }
+                Spawn::Monster {
+                    dir: MonsterDir::Random,
+                    x,
+                    y,
+                    kind,
+                } => {
+                    // The loader draws the broken z-bot's direction as it
+                    // scans; fix it now so later draws stay in order.
+                    let dir = MonsterDir::Fixed(self.session.rng.rand(0, 3));
+                    self.level.spawns[i] = Spawn::Monster { x, y, kind, dir };
+                }
+                // 2.2b–f create the other objects.
+                _ => {}
+            }
+        }
+    }
+
+    /// The end of `LoadLevel`: focus on the first player, greet and place
+    /// the camera above them.
+    fn focus_first_player(&mut self) -> Result<()> {
+        let Some(k) = (1..self.players.len()).find(|&k| self.players[k].exists) else {
+            return Err(crate::Error::Level("the level has no player".into()));
+        };
+        let talk = match k {
+            3 => 6,
+            4 => 7,
+            _ => self.session.rng.rand(0, 4),
+        };
+        self.events.push(Event::Sound(Sound::Talk(talk)));
+        let p = &mut self.players[k];
+        p.focus = true;
+        let (x, y) = (p.x as f32, p.y as f32);
+        self.camera.position = if self.level.view3d {
+            [x + 0.5, 10.6, -y - 0.5 + 10.0]
+        } else {
+            [x + 0.5, 10.4 + 10.0, -y - 9.5 + 10.0]
+        };
+        // 2.2f: StartSign for a sign under the player.
+        Ok(())
+    }
+
+    /// Events from [`World::start`] and the last [`World::step`].
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+
+    /// Hands the session on to the next level or a restart.
+    pub fn into_session(self) -> Session {
+        self.session
+    }
+
+    fn any_dying(&self) -> bool {
+        self.players.iter().any(|p| p.dying)
+    }
+
+    fn any_dead(&self) -> bool {
+        self.players.iter().any(|p| p.dead)
+    }
+
+    /// Runs one tick: `UpdateGame`, then the timer check `MainGameLoop`
+    /// makes after each frame's ticks.
+    pub fn step(&mut self, input: Input) {
+        self.events.clear();
+        self.clock_ms += i64::from(self.ruleset.tick_ms);
+
+        // 2.2f: reset SFXSingleVolume.
+        self.control(input);
+        if self.focus_switch_timer > 0 {
+            self.focus_switch_timer -= 1;
+        }
+        for i in 1..self.players.len() {
+            // 2.2a: walk animation end, blinking and idle animations (these
+            // draw random numbers).
+            self.update_dying(i);
+        }
+        if self.level_timer < 160 {
+            // Fade in.
+            self.camera.translate(0.0, -10.0 / 160.0, -10.0 / 160.0);
+            self.camera.pitch += -35.0 / 160.0;
+        }
+
+        // 2.2b: players and boxes standing on active conveyors move on.
+        // 2.2a–f, in this order: ControlFireballs, ControlPlayer (1–4),
+        // ControlBoxes, ControlElectroTiles, ControlCannons, ControlSpikes,
+        // ControlTimerButtons, ControlMonsters, ControlItems, ControlFish,
+        // ControlParticles (renderer), ControlFireballs again,
+        // ControlBoxers, ControlWarpers.
+        // Then object movement (players, transporters, boxes, monsters), the
+        // end of moves (transporters first, then players with trampoline
+        // landings, boxes, monsters) and CleanUpBoxes, CleanUpFireballs,
+        // CleanUpMonsters, CleanUpItems.
+
+        self.swoop_camera();
+        // Water, conveyor and laser gate animation: renderer (step 3.2).
+        if self.completion == Completion::Won {
+            self.completion_timer += 1;
+            self.camera.translate(0.0, 10.0 / 512.0, 10.0 / 512.0);
+            self.camera.pitch += 45.0 / 512.0;
+            if self.completion_timer == 300 {
+                self.completion = Completion::Done;
+            }
+            self.lights.light_target = [0; 3];
+            self.lights.light_speed = 2;
+            self.lights.ambient_target = [0; 3];
+            self.lights.ambient_speed = 1;
+        }
+        if self.final_gate_anim > 0 {
+            // The renderer sinks the gates (0.016 per tick) and hides them
+            // at 0.
+            self.final_gate_anim -= 1;
+        }
+        for p in &mut self.players[1..] {
+            if p.shrink > 0 {
+                p.shrink -= 1;
+            }
+        }
+        // 2.2f: play the loudest single sounds, then ControlSigns.
+        self.weather();
+        self.lights.update();
+        self.level_timer += 1;
+
+        self.count_down();
+    }
+
+    /// The input half of `UpdateGame`: free camera or player control.
+    fn control(&mut self, input: Input) {
+        if input.camera && !self.level.view3d {
+            // 2.2f: on entering, StopSign(11..30).
+            self.free_camera_active = true;
+            let step = 0.1;
+            let width = self.level.grid.width() as f32;
+            let height = self.level.grid.height() as f32;
+            // Each check sees the moves before it.
+            if input.up && self.camera.position[2] < -1.0 - 9.5 {
+                self.camera.translate(0.0, 0.0, step);
+                self.free_camera[1] += step;
+            }
+            if input.down && self.camera.position[2] > -(height - 1.0) - 9.5 {
+                self.camera.translate(0.0, 0.0, -step);
+                self.free_camera[1] -= step;
+            }
+            if input.left && self.camera.position[0] > 1.0 {
+                self.camera.translate(-step, 0.0, 0.0);
+                self.free_camera[0] -= step;
+            }
+            if input.right && self.camera.position[0] < width - 1.0 {
+                self.camera.translate(step, 0.0, 0.0);
+                self.free_camera[0] += step;
+            }
+            return;
+        }
+
+        // 2.2f: on leaving the free camera, CheckSigns().
+        self.free_camera_active = false;
+        let [fx, fz] = self.free_camera;
+        if fx != 0.0 || fz != 0.0 {
+            self.camera.translate(-fx, 0.0, -fz);
+            self.free_camera = [0.0; 2];
+        }
+        if !self.any_dying()
+            && !self.any_dead()
+            && self.completion == Completion::Playing
+            && self.focus_switch_timer < 20
+        {
+            // 2.2a/b: NormalKeyboardControl, or View3dKeyboardControl in
+            // first person.
+        }
+        if input.switch && self.focus_switch_timer == 0 {
+            let blocked = self.players.iter().any(|p| p.exists && (p.dying || p.dead));
+            if !blocked {
+                // 2.2a: SwitchPlayer(1).
+            }
+        }
+    }
+
+    /// The dying and dead half of `UpdateGame`'s per-player loop.
+    fn update_dying(&mut self, i: usize) {
+        let p = &self.players[i];
+        if p.dying && !p.dead && p.exists {
+            // The renderer lifts and spins the player by the same amount.
+            let lift = self.players[i].dying_timer as f32 / 2000.0;
+            self.camera.translate(0.0, lift, 0.0);
+            let p = &mut self.players[i];
+            p.dying_timer -= 1;
+            if p.dying_timer == 0 {
+                p.dying_timer = 320;
+                p.dead = true;
+                let others_dead = self
+                    .players
+                    .iter()
+                    .enumerate()
+                    .any(|(j, q)| j != i && q.exists && q.dead);
+                if !others_dead {
+                    self.lose_sound();
+                }
+                self.events.push(Event::PlayerExploded(i));
+                // 30*DetailLevel+1 particles, each drawing an angle, a speed,
+                // a texture and a vertical speed.
+                let particles = usize::try_from(30 * self.options.detail_level + 1).unwrap_or(0);
+                self.session.rng.skip(4 * particles);
+            }
+        }
+        if self.players[i].dead {
+            self.lights.fade_out();
+            let p = &mut self.players[i];
+            p.dying_timer -= 1;
+            if p.dying_timer <= 0 {
+                self.completion = Completion::Restart;
+            }
+        }
+    }
+
+    /// Picks `SFXLevelLose`. The original mixes `MilliSecs()` into the pick;
+    /// the simulated clock stands in for it.
+    fn lose_sound(&mut self) {
+        self.session.classic_death_sound += 1;
+        let now = self.clock_ms as i32;
+        let k2 = now % 100;
+        let k3 = now.wrapping_mul(self.session.rng.rand(7, 37)) % 100;
+        let sound = if self.session.classic_death_sound < 3 || k3 < 75 {
+            LoseSound::Classic
+        } else if k2 < 30 {
+            LoseSound::Variant('b')
+        } else if k2 < 60 {
+            LoseSound::Variant('c')
+        } else if k2 < 85 {
+            LoseSound::Variant('d')
+        } else if k2 < 90 {
+            LoseSound::Spanish
+        } else if k2 < 95 {
+            LoseSound::German
+        } else {
+            LoseSound::French
+        };
+        self.events.push(Event::Sound(Sound::Lose(sound)));
+    }
+
+    /// The camera swoop after switching player or teleporting.
+    fn swoop_camera(&mut self) {
+        let step = |d: &mut f32| {
+            if *d >= CAMERA_STEP {
+                *d -= CAMERA_STEP;
+                CAMERA_STEP
+            } else if *d <= -CAMERA_STEP {
+                *d += CAMERA_STEP;
+                -CAMERA_STEP
+            } else {
+                std::mem::take(d)
+            }
+        };
+        let dx = step(&mut self.camera_swoop[0]);
+        self.camera.translate(dx, 0.0, 0.0);
+        let dz = step(&mut self.camera_swoop[1]);
+        self.camera.translate(0.0, 0.0, dz);
+    }
+
+    /// Snow, rain, lightning and psyche. Every tick draws for lightning and
+    /// psyche, even in levels without them: Blitz's `And` does not
+    /// short-circuit.
+    fn weather(&mut self) {
+        let detail = 5 - self.options.detail_level;
+        let rng = &mut self.session.rng;
+        let spawn_tick = self.level_timer % (1 + detail * detail) == 0;
+        if self.level.weather.snow && spawn_tick {
+            // A snowflake: position, fall speed and spin.
+            rng.skip(5);
+        }
+        if self.level.weather.rain && spawn_tick {
+            // A raindrop: position.
+            rng.skip(3);
+        }
+
+        let calm = !self.any_dying() && self.sign_active == 0;
+        let roll = self.session.rng.rand(0, 150);
+        if self.level.weather.lightning && self.lightning_timer == 0 && calm && roll == 1 {
+            self.lightning_timer = 1;
+            if self.session.rng.rand(0, 3) == 1 {
+                let n = self.session.rng.rand(0, 3);
+                self.events.push(Event::Sound(Sound::Lightning(n)));
+            }
+        }
+        if self.lightning_timer > 0 && calm {
+            self.lightning();
+        }
+
+        let roll = self.session.rng.rand(0, 100);
+        if self.level.weather.psyche && calm && roll == 1 {
+            let ch = self.level.channels;
+            let rng = &mut self.session.rng;
+            for (c, on) in [ch.red, ch.green, ch.blue].into_iter().enumerate() {
+                if on {
+                    self.lights.light_target[c] = rng.rand(0, 255);
+                    self.lights.ambient_target[c] = rng.rand(100, 255);
+                } else {
+                    self.lights.light_target[c] = 100;
+                    self.lights.ambient_target[c] = 100;
+                }
+            }
+            self.lights.light_speed = 1;
+            self.lights.ambient_speed = 1;
+        }
+    }
+
+    /// Three flashes over 100 ticks.
+    fn lightning(&mut self) {
+        let ch = self.level.channels;
+        let rng = &mut self.session.rng;
+        match self.lightning_timer {
+            1 | 30 | 60 => {
+                let lit = |on: bool| if on { 255 } else { 100 };
+                self.lights.light_target = [lit(ch.red), lit(ch.green), lit(ch.blue)];
+                self.lights.ambient_target = self.lights.light_target;
+                self.lights.light_speed = rng.rand(20, 40);
+                self.lights.ambient_speed = rng.rand(20, 30);
+            }
+            10 | 35 | 65 => {
+                let blue = if ch.blue { 255 } else { 100 };
+                self.lights.light_target = [100, 100, blue];
+                self.lights.ambient_target = [100, 100, blue];
+                self.lights.light_speed = rng.rand(5, 10);
+                self.lights.ambient_speed = rng.rand(2, 5);
+            }
+            _ => {}
+        }
+        self.lightning_timer += 1;
+        if self.lightning_timer == 100 {
+            self.lightning_timer = 0;
+        }
+    }
+
+    /// `MainGameLoop`'s time limit. The original checks it once per frame
+    /// against the wall clock; here it runs after every tick against the
+    /// simulated clock, so a second lasts 91 ticks (1001 ms).
+    fn count_down(&mut self) {
+        if self.completion != Completion::Playing || self.options.no_time_limit {
+            return;
+        }
+        if self.clock_ms - self.map_ms >= 1000 {
+            self.map_time -= 1;
+            if self.map_time == 30 {
+                self.events.push(Event::Sound(Sound::Time));
+            }
+            if (0..=10).contains(&self.map_time) {
+                self.events.push(Event::Sound(Sound::Count(self.map_time)));
+            }
+            self.map_ms = self.clock_ms;
+        }
+        if self.map_time < 0 {
+            // 2.2a: KillPlayer for every existing player.
+            self.map_time = 0;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setup::tests::level;
+
+    fn start(tiles: &[i32], objects: &[i32]) -> World {
+        let l = level(5, tiles.len(), tiles, objects);
+        World::start(&l, Ruleset::rtwp(), Options::default(), Session::default()).unwrap()
+    }
+
+    #[test]
+    fn greets_and_frames_the_first_player() {
+        let w = start(&[100, 100, 100], &[0, 2, 1]);
+        assert!(w.players[1].focus && !w.players[2].focus);
+        assert_eq!(
+            w.events(),
+            [Event::Sound(Sound::Talk(BlitzRng::default().rand(0, 4)))]
+        );
+        assert_eq!(w.camera.position, [2.5, 20.4, 0.5]);
+        assert_eq!(w.camera.pitch, 90.0);
+
+        let w = start(&[100, 100], &[3, 0]);
+        assert_eq!(w.events(), [Event::Sound(Sound::Talk(6))]);
+        assert_eq!(w.session.rng, BlitzRng::default());
+
+        let l = level(5, 2, &[100, 100], &[0, 0]);
+        let err = World::start(&l, Ruleset::rtwp(), Options::default(), Session::default());
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn broken_zbot_draws_its_direction_before_the_greeting() {
+        let w = start(&[100, 100], &[26, 1]);
+        let mut rng = BlitzRng::default();
+        let dir = rng.rand(0, 3);
+        let talk = rng.rand(0, 4);
+        assert!(matches!(
+            w.level.spawns[0],
+            Spawn::Monster { dir: MonsterDir::Fixed(d), .. } if d == dir
+        ));
+        assert_eq!(w.events(), [Event::Sound(Sound::Talk(talk))]);
+    }
+
+    #[test]
+    fn every_tick_draws_for_lightning_and_psyche() {
+        let mut w = start(&[100], &[1]);
+        let mut rng = w.session.rng.clone();
+        for _ in 0..50 {
+            w.step(Input::default());
+            rng.skip(2);
+        }
+        assert_eq!(w.session.rng, rng);
+    }
+
+    #[test]
+    fn snow_draws_on_its_detail_cadence() {
+        let mut w = start(&[100, 100], &[1, 84]);
+        let mut rng = w.session.rng.clone();
+        // Detail 3: a flake every 1 + 2*2 = 5 ticks, from tick 0.
+        for _ in 0..10 {
+            w.step(Input::default());
+        }
+        rng.skip(10 * 2 + 2 * 5);
+        assert_eq!(w.session.rng, rng);
+    }
+
+    #[test]
+    fn time_limit_counts_down_in_simulated_seconds() {
+        let mut w = start(&[100], &[1]);
+        w.map_time = 11;
+        let mut sounds = vec![];
+        for tick in 1..=183 {
+            w.step(Input::default());
+            if tick == 91 {
+                assert_eq!(w.map_time, 11);
+            }
+            if tick == 92 {
+                assert_eq!(w.map_time, 10);
+                sounds.extend_from_slice(w.events());
+            }
+        }
+        assert_eq!(w.map_time, 9);
+        assert_eq!(sounds, [Event::Sound(Sound::Count(10))]);
+
+        w.options.no_time_limit = true;
+        for _ in 0..200 {
+            w.step(Input::default());
+        }
+        assert_eq!(w.map_time, 9);
+    }
+
+    #[test]
+    fn camera_fades_in_over_160_ticks() {
+        let mut w = start(&[100], &[1]);
+        let [x, y, z] = w.camera.position;
+        for _ in 0..200 {
+            w.step(Input::default());
+        }
+        let [x2, y2, z2] = w.camera.position;
+        assert_eq!(x2, x);
+        assert!((y - y2 - 10.0).abs() < 1e-4 && (z - z2 - 10.0).abs() < 1e-4);
+        assert!((w.camera.pitch - 55.0).abs() < 1e-4);
+        // Both lights take 255 ticks to come up.
+        assert_eq!(w.lights.light, [145; 3]);
+        for _ in 0..55 {
+            w.step(Input::default());
+        }
+        assert_eq!(w.lights.light, [255, 255, 255]);
+        assert_eq!(w.lights.ambient, [255, 255, 255]);
+    }
+
+    #[test]
+    fn free_camera_moves_and_snaps_back() {
+        let mut objects = [0; 30];
+        objects[0] = 1;
+        let mut w = start(&[100; 30], &objects);
+        let start = w.camera.position;
+        let held = Input {
+            camera: true,
+            right: true,
+            ..Input::default()
+        };
+        for _ in 0..10 {
+            w.step(held);
+        }
+        assert!(w.free_camera_active);
+        assert!((w.free_camera[0] - 1.0).abs() < 1e-5);
+        w.step(Input::default());
+        assert!(!w.free_camera_active);
+        assert!((w.camera.position[0] - start[0]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_dead_player_restarts_the_level() {
+        let mut w = start(&[100], &[1]);
+        w.players[1].dying = true;
+        w.players[1].dying_timer = 50;
+        let mut exploded_at = None;
+        let mut tick = 0;
+        while w.completion == Completion::Playing {
+            w.step(Input::default());
+            tick += 1;
+            if w.events().contains(&Event::PlayerExploded(1)) {
+                exploded_at = Some(tick);
+                assert!(
+                    w.events()
+                        .contains(&Event::Sound(Sound::Lose(LoseSound::Classic)))
+                );
+            }
+            assert!(tick < 1000);
+        }
+        assert_eq!(exploded_at, Some(50));
+        assert_eq!(tick, 50 + 319);
+        assert_eq!(w.completion, Completion::Restart);
+        assert_eq!(w.session.classic_death_sound, 1);
+        assert_eq!(w.lights.light_target, [-255; 3]);
+    }
+
+    #[test]
+    fn same_inputs_give_the_same_world() {
+        let run = || {
+            let mut w = start(&[100, 100, 100, 100], &[1, 86, 87, 85]);
+            for t in 0..2000u32 {
+                w.step(Input::from_bits((t / 7 % 64) as u8));
+            }
+            w
+        };
+        assert_eq!(run(), run());
+    }
+}
