@@ -1,0 +1,5 @@
+# Copyrighted game assets (copied from local installs, see tools/import-assets.sh)
+/assets/
+
+# Blitz3D v1.83 toolchain (third-party; install locally to build the original games)
+/Blitz3D v1.83/
