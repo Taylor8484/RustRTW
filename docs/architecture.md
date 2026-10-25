@@ -60,7 +60,13 @@ tested headless and outlive any framework upgrade or swap.
   (case-insensitive), then a loose file in the game folder.
 - `level` — level files v1–v6 as stored. Parsing takes the loading `Game`
   because TOW, RTWP and WSW read the header differently.
-- Next: player saves (`.pla`), `options.cfg`.
+- `save` — player files (`players/*.pla`, `.bak`), one layout per game.
+- `config` — `options.cfg`, TOW's `extra.cfg`, WSW's `story.dat`. These
+  parse like Blitz: missing ints read as 0, since the shipped WSW
+  `options.cfg` is shorter than its loader expects.
+- Saves and configs are kept as stored and written back byte-identically.
+  Load-time fix-ups (e.g. RTWP's world pack 0 → `i * 10`) belong to profile
+  loading.
 
 ### logic
 

@@ -8,15 +8,19 @@
 
 pub mod assets;
 pub mod blitz;
+pub mod config;
 pub mod level;
 pub mod pack;
+pub mod save;
 
 mod error;
 
 pub use assets::GameAssets;
+pub use config::{ExtraCfg, Options, StoryDat};
 pub use error::{Error, Result};
 pub use level::Level;
 pub use pack::{Pack, PackEntry, PackIndex};
+pub use save::PlayerFile;
 
 /// One of the three games. Files shared between them are not always read the
 /// same way, so parsers that differ take the game that loads the file.

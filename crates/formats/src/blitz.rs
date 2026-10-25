@@ -5,7 +5,8 @@
 //! are single-byte text, decoded here as Latin-1 so no byte is ever lost.
 //!
 //! Unlike Blitz, which returns zeros when reading past the end of a file,
-//! these readers report [`Error::UnexpectedEof`].
+//! these readers report [`Error::UnexpectedEof`]. [`BlitzWriter`] is the
+//! inverse, for files the games write back (saves, options).
 
 use crate::{Error, Result};
 
@@ -77,6 +78,50 @@ fn latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|&b| char::from(b)).collect()
 }
 
+/// Builds a byte buffer using Blitz3D's encodings (`WriteInt`, `WriteString`…).
+#[derive(Debug, Clone, Default)]
+pub struct BlitzWriter {
+    data: Vec<u8>,
+}
+
+impl BlitzWriter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.data
+    }
+
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        self.data.extend_from_slice(bytes);
+    }
+
+    pub fn write_byte(&mut self, v: u8) {
+        self.data.push(v);
+    }
+
+    pub fn write_short(&mut self, v: u16) {
+        self.write_bytes(&v.to_le_bytes());
+    }
+
+    pub fn write_int(&mut self, v: i32) {
+        self.write_bytes(&v.to_le_bytes());
+    }
+
+    pub fn write_float(&mut self, v: f32) {
+        self.write_bytes(&v.to_le_bytes());
+    }
+
+    /// Writes a `u32` length and the Latin-1 bytes. Characters outside
+    /// Latin-1 cannot be stored and become `?`.
+    pub fn write_string(&mut self, s: &str) {
+        let bytes: Vec<u8> = s.chars().map(|c| u8::try_from(c).unwrap_or(b'?')).collect();
+        self.write_bytes(&(bytes.len() as u32).to_le_bytes());
+        self.write_bytes(&bytes);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +169,26 @@ mod tests {
             })
         ));
         assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn writer_round_trips_through_reader() {
+        let mut w = BlitzWriter::new();
+        w.write_int(-7);
+        w.write_float(2.25);
+        w.write_short(0xBEEF);
+        w.write_byte(9);
+        w.write_string("Café");
+        w.write_string("Ω");
+        let data = w.into_bytes();
+        let mut r = BlitzReader::new(&data);
+        assert_eq!(r.read_int().unwrap(), -7);
+        assert_eq!(r.read_float().unwrap(), 2.25);
+        assert_eq!(r.read_short().unwrap(), 0xBEEF);
+        assert_eq!(r.read_byte().unwrap(), 9);
+        assert_eq!(r.read_string().unwrap(), "Café");
+        assert_eq!(r.read_string().unwrap(), "?");
+        assert!(r.is_eof());
     }
 
     #[test]
