@@ -1,6 +1,7 @@
 AppTitle "Return To Wonderland"
 
 Include "globals.bb"
+Include "recorder.bb"
 
 
 	
@@ -58,6 +59,8 @@ While GameExit=False
   EndIf
 		
 Wend
+
+RecClose()
 
 
 
@@ -149,6 +152,8 @@ End
 
 
 Function StartLevel(Level)
+
+	RecStartLevel(Level)
 
 	
 
@@ -297,6 +302,7 @@ Function StartLevel(Level)
 		PlayerShrink(i)=0
 	Next	
 	ShiftKeyPressed=0
+	RecLevelStarted()
 	
 	
 
@@ -544,10 +550,12 @@ Function MainGameLoop()
 
 		
 		; do the game in here
+		RecTickStart()
 		UpdateGame()		
 		
 		
 		UpdateWorld
+		If k<TweenTicks Then RecTickEnd()
 	
 	Next
 		
@@ -632,6 +640,7 @@ Function MainGameLoop()
 	; Time
 	If LevelCompleted=0 And NoTimeLimit=0
 		i=MilliSecs()
+		RecFrameMs=i
 		MapTimeElapsed=i-MapMilliTime
 		
 		If MapTimeElapsed>=1000
@@ -649,6 +658,7 @@ Function MainGameLoop()
 			MapTime=0
 		EndIf
 	EndIf
+	RecFrame(TweenTicks)
 	MapTimeMinutes=MapTime / 60
 	MapTimeSeconds=MapTime Mod 60
 	MapTimeString$=Str$(MapTimeMinutes)+":"

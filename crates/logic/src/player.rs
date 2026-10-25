@@ -89,6 +89,18 @@ pub struct Player {
     pub shadow: bool,
 }
 
+impl Player {
+    /// The tile a player counts as on: the one it is leaving until
+    /// halfway.
+    pub(crate) fn nearest_tile(&self) -> (i32, i32) {
+        if !self.moving || self.moving_timer >= self.speed / 2 {
+            (self.x, self.y)
+        } else {
+            (self.x2, self.y2)
+        }
+    }
+}
+
 /// The heading `MovePlayer` turns towards.
 fn facing(dx: i32, dy: i32) -> i32 {
     match (dx, dy) {

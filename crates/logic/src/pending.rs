@@ -1,29 +1,13 @@
 //! The other object families as far as the ported code needs them, until
-//! steps 2.2c–f port them. Each step moves its part out of this file.
+//! steps 2.2d–f port them. Each step moves its part out of this file.
 //!
-//! The monster and item lists stay empty for now, so the calls that act on
-//! one of them cannot be reached yet. The others can: buttons and
-//! teleporters are driven by tiles, and push cannons fire fireballs. They
-//! do nothing until their family exists, so a level that uses them does
-//! not play like the original yet.
+//! The item list stays empty for now, so the calls that act on an item
+//! cannot be reached yet. The others can: buttons and teleporters are
+//! driven by tiles, and push cannons, saucers and fire stinkers fire
+//! fireballs. They do nothing until their family exists, so a level that
+//! uses them does not play like the original yet.
 
 use crate::World;
-
-/// The `Monster*` arrays. Step 2.2c adds the rest.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Monster {
-    pub x: i32,
-    pub y: i32,
-    pub x2: i32,
-    pub y2: i32,
-    pub moving: bool,
-    pub moving_timer: i32,
-    pub speed: i32,
-    pub dead: bool,
-    pub dying: bool,
-    /// `MonsterType`.
-    pub kind: i32,
-}
 
 /// The `Item*` arrays. Step 2.2d adds the rest.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,23 +19,23 @@ pub struct Item {
 }
 
 impl World {
-    /// 2.2c: `CanMonsterMove`.
-    pub(crate) fn can_monster_move(&mut self, _i: usize, _dx: i32, _dy: i32) -> bool {
-        unreachable!("2.2c: no monsters are created yet")
-    }
-
-    /// 2.2c: `MoveMonster`.
-    pub(crate) fn move_monster(&mut self, _i: usize, _dx: i32, _dy: i32) {
-        unreachable!("2.2c: no monsters are created yet")
-    }
-
-    /// 2.2c: `KillMonster`.
-    pub(crate) fn kill_monster(&mut self, _i: usize) {
-        unreachable!("2.2c: no monsters are created yet")
-    }
-
     /// 2.2d: `PickUpItem`.
     pub(crate) fn pick_up_item(&mut self, _i: usize, _who: usize) {
+        unreachable!("2.2d: no items are created yet")
+    }
+
+    /// 2.2d: the rest of a rainbow spirit or shadow stinker taking coin
+    /// `j` in `CanMonsterMove`: `NofCrystals - 1`, and at 0
+    /// `PlayMySound(SFXLastCoin, 0)` and `ToggleLaserGate(0, True)`; then
+    /// `KillItem(j)`. The coin stays until `CleanUpItems`, and nothing stops
+    /// it being taken twice in a tick.
+    pub(crate) fn take_coin(&mut self, _j: usize) {
+        unreachable!("2.2d: no items are created yet")
+    }
+
+    /// 2.2d: the rest of a shadow stinker taking bonus coin `j`:
+    /// `NofBonusCoins - 1` and `KillItem(j)`.
+    pub(crate) fn take_bonus_coin(&mut self, _j: usize) {
         unreachable!("2.2d: no items are created yet")
     }
 
@@ -90,6 +74,6 @@ impl World {
         0
     }
 
-    /// 2.2f: `CreateFireball`. Push cannons fire into nothing for now.
+    /// 2.2f: `CreateFireball`. Shots go nowhere for now.
     pub(crate) fn create_fireball(&mut self, _x: i32, _y: i32, _dx: i32, _dy: i32) {}
 }

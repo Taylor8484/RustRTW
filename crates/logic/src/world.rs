@@ -14,7 +14,8 @@
 use wonderland_formats::Level;
 
 use crate::block::{Block, Boxer, Transporter};
-use crate::pending::{Item, Monster};
+use crate::monster::{Monster, Warper};
+use crate::pending::Item;
 use crate::player::Player;
 use crate::setup::{LoadOptions, MonsterDir, Setup, Spawn};
 use crate::sign::{LEVEL_NAME, ShownSign};
@@ -114,6 +115,15 @@ pub enum Sound {
     /// the loudest volume asked for (1 cannon, 13 box factory; 12 is also
     /// a prism breaking).
     Single(i32),
+    /// `SFXBounce` at this pitch: a beach ball hops.
+    BallBounce(i32),
+    /// `SFXCoilyDeath`: a beach ball pops.
+    CoilyDeath,
+    /// `SFXBombExplo`: a monster blows up.
+    BombExplode,
+    /// `SFXSaucerDie` at this pitch: 16000 for a saucer, 10000 for the
+    /// mother ship.
+    SaucerDie(i32),
     /// `SFXTime`: 30 seconds left.
     Time,
     /// `SFXCount(n)`: the last ten seconds.
@@ -235,8 +245,9 @@ pub struct World {
     /// Box factories.
     pub boxers: Vec<Boxer>,
     pub transporters: Vec<Transporter>,
-    /// Monsters, in creation order (2.2c).
+    /// Monsters, in creation order.
     pub monsters: Vec<Monster>,
+    pub warpers: Vec<Warper>,
     /// Coins, gates, clocks and bonus coins, in creation order (2.2d).
     pub items: Vec<Item>,
     /// `ConveyorActive(1)` and `(2)`: conveyor tiles 5x0–5x7 and 5x8 up.
@@ -244,6 +255,11 @@ pub struct World {
     /// `BothCompleted`: bit `k - 1` is set once player `k` has left through
     /// the exit.
     pub both_completed: i32,
+    /// `CurrentLevelScore`: 250 per monster killed, before the bonuses.
+    pub level_score: i32,
+    /// `SoundPitch SFXSingle(8)`: a chomper sets it each time it picks a
+    /// move.
+    pub chomp_pitch: i32,
     /// `EndMovePlayerTrampoline`: the move ending is a jump landing.
     pub end_move_trampoline: bool,
     /// `View3dRotation`: the first-person heading in quarter turns.
@@ -311,6 +327,9 @@ impl World {
             transporters: Vec::new(),
             single_volume: [0.0; 17],
             monsters: Vec::new(),
+            warpers: Vec::new(),
+            level_score: 0,
+            chomp_pitch: 0,
             items: Vec::new(),
             conveyor_active: [true; 2],
             both_completed: 0,
@@ -456,10 +475,23 @@ impl World {
                 } => {
                     // The loader draws the broken z-bot's direction as it
                     // scans; fix it now so later draws stay in order.
-                    let dir = MonsterDir::Fixed(self.session.rng.rand(0, 3));
-                    self.level.spawns[i] = Spawn::Monster { x, y, kind, dir };
+                    let d = self.session.rng.rand(0, 3);
+                    self.level.spawns[i] = Spawn::Monster {
+                        x,
+                        y,
+                        kind,
+                        dir: MonsterDir::Fixed(d),
+                    };
+                    self.create_monster(x, y, kind, d);
                 }
-                // 2.2b–f create the other objects.
+                Spawn::Monster {
+                    dir: MonsterDir::Fixed(d),
+                    x,
+                    y,
+                    kind,
+                } => self.create_monster(x, y, kind, d),
+                Spawn::Warper { x, y, kind } => self.create_warper(x, y, kind),
+                // 2.2d–f create the other objects.
                 _ => {}
             }
         }
@@ -545,23 +577,27 @@ impl World {
             self.control_player(k);
         }
         self.control_boxes();
-        // 2.2c–f, in this order: ControlElectroTiles, ControlCannons,
-        // ControlSpikes, ControlTimerButtons, ControlMonsters, ControlItems,
-        // ControlFish, ControlParticles (renderer), ControlFireballs again.
+        // 2.2e–f, in this order: ControlElectroTiles, ControlCannons,
+        // ControlSpikes, ControlTimerButtons.
+        self.control_monsters();
+        // 2.2d, 2.2f: ControlItems, ControlFish, ControlParticles
+        // (renderer), ControlFireballs again.
         self.control_boxers();
-        // 2.2c: ControlWarpers.
+        self.control_warpers();
 
         self.move_players();
         self.move_transporters();
         self.move_boxes();
-        // 2.2c: monster movement.
+        self.move_monsters();
         // Transporters land first: a player may be riding one.
         self.end_transporter_moves();
         self.end_player_moves();
         self.end_box_moves();
-        // 2.2c: the end of monster moves.
+        self.end_monster_moves();
         self.clean_up_boxes();
-        // 2.2c, 2.2d, 2.2f: CleanUpFireballs, CleanUpMonsters, CleanUpItems.
+        // 2.2f: CleanUpFireballs.
+        self.clean_up_monsters();
+        // 2.2d: CleanUpItems.
 
         self.swoop_camera();
         // Water, conveyor and laser gate animation: renderer (step 3.2).

@@ -105,6 +105,9 @@ differences are parameters on a `Ruleset`, not separate code paths per game.
   blink animations. The entity position is simulated as well as the tile.
 - `sign` — sign texts on screen and their effect on the lights.
 - `block` — boxes and other pushables, box factories and transporters.
+- `monster` — the monsters (beach balls, z-bots, bombers, saucers,
+  chompers, ghosts, rainbow spirits, broken z-bots, the mother ship, shadow
+  and fire stinkers) and the warp gates that spawn them.
 - `md2` — Blitz's MD2 animation state, which the player code reads.
 - `pending` — stand-ins for the object families still to port (step 2.2).
 - `world` — `World::start` (`StartLevel`) and `World::step` (`UpdateGame`
@@ -142,6 +145,8 @@ Behaviours that silently break a line-by-line translation:
 - Undeclared variables are implicitly created with value 0 — a typo in the
   original is a new variable, not an error.
 - Reading past end of file returns zeros rather than failing.
+- A nested `For` that reuses the outer loop's variable leaves it past
+  the outer bound, so the outer loop runs once (`ControlWarpers`).
 - Function arguments evaluate left to right, which fixes the order of
   random draws in calls like `CreateParticle(..., Rnd(), Rnd())`.
 
@@ -151,3 +156,31 @@ Behaviours that silently break a line-by-line translation:
 2. Record input sequences while playing each original game in Blitz3D, then
    replay them through `logic` and compare outcomes (level completed, positions,
    coins, timer).
+
+### Recordings
+
+- `RTWP/recorder.bb` logs a playthrough when the game runs with `-record`
+  on its command line (in the Blitz3D IDE: Program > Program Command Line).
+  Without it the game behaves as shipped: the recorder draws no random
+  numbers and changes no state. Each session writes
+  `replay <date> <time>.wlr` next to the game. Copy the files to
+  `assets/recordings/`.
+- The log is text, one record per line. At each `StartLevel` it holds the
+  level file, `RndSeed()`, `DetailLevel`, the sound settings, `NoTimeLimit`,
+  `ClassicDeathSound` and the menu style overrides. Per tick it holds the
+  keys held, `RndSeed()` before and after, and one line of state per object
+  family. Per frame it holds the tick count and the `MilliSecs()` of the
+  time-limit check. Floats are logged as their bits. `logic::replay`
+  documents the records.
+- `logic::replay` parses a log and replays each level start. It seeds
+  `Session::rng`, sets `Options` from the log, feeds the keys and reports
+  the first tick where each family differs. Families that are not ported
+  yet are left out (`Family::PORTED`). The time limit counts down on the
+  recorded frame clock, because the original checks it once per frame
+  against the wall clock.
+- If the seed before a tick differs from the seed after the previous one,
+  the original drew random numbers outside `UpdateGame` (a pause menu, for
+  example). The replay then reseeds and lists the tick in the report.
+- `tests/recordings.rs` replays every `assets/recordings/*.wlr` and fails
+  on any difference. Set `WL_REPLAY_REPORT=1` to print the report without
+  failing.

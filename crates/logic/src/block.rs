@@ -538,8 +538,8 @@ impl World {
         }
     }
 
-    /// A boom box's blast on one tile.
-    fn blast(&mut self, x: i32, y: i32) {
+    /// A boom box's or a bomber's blast on one tile.
+    pub(crate) fn blast(&mut self, x: i32, y: i32) {
         let hit = |ax: i32, bx: i32, ay: i32, by: i32| (x == ax || x == bx) && (y == ay || y == by);
         for j in 0..self.blocks.len() {
             let b = &self.blocks[j];
@@ -618,11 +618,7 @@ impl World {
             if m.dead || m.dying {
                 continue;
             }
-            let near = if !m.moving || m.moving_timer >= m.speed / 2 {
-                (m.x, m.y)
-            } else {
-                (m.x2, m.y2)
-            };
+            let near = m.nearest_tile();
             for d in [-1, 1] {
                 for at in [(x2 + d, y2), (x2, y2 + d)] {
                     if at == near {
