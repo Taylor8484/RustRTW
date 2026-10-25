@@ -39,6 +39,7 @@ crates/
   logic/     deterministic simulation, per-game Ruleset      (no engine deps)
   campaign/  level order & progression per game
   game/      Bevy app: launcher → game select → menus → play
+  inspect/   wl-inspect CLI: dump packs (later levels, saves) for debugging
 data/
   tow.ron, rtwp.ron, wsw.ron   per-game definitions (worlds, level lists,
                                names, story text, music, ruleset flags)
@@ -95,11 +96,3 @@ Behaviours that silently break a line-by-line translation:
 2. Record input sequences while playing each original game in Blitz3D, then
    replay them through `logic` and compare outcomes (level completed, positions,
    coins, timer).
-
-## Roadmap
-
-1. `formats`: packs ✅, levels, saves.
-2. `logic` with RTWP rules.
-3. `game`: one RTWP level playable end to end.
-4. TOW and WSW as game definitions + ruleset flags; WSW map/story; launcher.
-5. Later: level editor, translations, save import.

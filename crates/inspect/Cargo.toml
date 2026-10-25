@@ -1,0 +1,18 @@
+[package]
+name = "wonderland-inspect"
+description = "Command-line inspector for Wonderland Classic game data"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "wl-inspect"
+path = "src/main.rs"
+
+[dependencies]
+wonderland-formats = { path = "../formats" }
+
+[lints]
+workspace = true
