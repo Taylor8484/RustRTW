@@ -4,9 +4,12 @@
 //!   wl-inspect pack <game dir> stats
 //!   wl-inspect pack <game dir> extract <name> <out file>
 //!   wl-inspect pack <game dir> extract-all <out dir>
+//!   wl-inspect level <game dir> <name>
 //!
 //! `extract` resolves `<name>` the way the games do (pack first, then a loose
 //! file in the game folder); the other pack commands only look at the pack.
+//! `level` looks for `<name>` in the game's level folder, then the game
+//! folder, and takes the game from the folder name (TOW, RTWP or WSW).
 //! Run with `cargo run -p wonderland-inspect -- <args>`.
 
 use std::collections::BTreeMap;
@@ -14,13 +17,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{env, fs};
 
-use wonderland_formats::{GameAssets, Pack};
+use wonderland_formats::{Game, GameAssets, Level, Pack};
 
 const USAGE: &str = "\
 usage: wl-inspect pack <game dir> list [filter]
        wl-inspect pack <game dir> stats
        wl-inspect pack <game dir> extract <name> <out file>
-       wl-inspect pack <game dir> extract-all <out dir>";
+       wl-inspect pack <game dir> extract-all <out dir>
+       wl-inspect level <game dir> <name>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -36,6 +40,7 @@ fn main() -> ExitCode {
 fn run(args: &[String]) -> Result<(), String> {
     match args {
         [group, dir, rest @ ..] if group == "pack" => pack(dir, rest),
+        [group, dir, name] if group == "level" => level(dir, name),
         _ => Err(USAGE.into()),
     }
 }
@@ -66,6 +71,71 @@ fn pack(dir: &str, args: &[String]) -> Result<(), String> {
         _ => return Err(USAGE.into()),
     }
     Ok(())
+}
+
+fn level(dir: &str, name: &str) -> Result<(), String> {
+    let game = game_from_dir(dir)?;
+    let assets = GameAssets::open(dir).map_err(|e| e.to_string())?;
+    let folder = if game == Game::Wsw {
+        "wswlevels"
+    } else {
+        "levels"
+    };
+    let data = [format!("{folder}\\{name}"), name.to_owned()]
+        .iter()
+        .find_map(|path| assets.read(path).ok())
+        .ok_or_else(|| format!("{name}: not found in {folder}\\ or the game folder"))?;
+    let l = Level::parse(&data, game).map_err(|e| format!("{name}: {e}"))?;
+
+    println!("magic        {:?} (v{})", l.magic, l.version);
+    println!("file name    {:?}", l.file_name);
+    if let Some(id) = l.map_id {
+        println!("map id       {id}");
+    }
+    println!("description  {:?}", l.description);
+    for (label, dir) in [
+        ("houses", &l.houses),
+        ("models", &l.models),
+        ("textures", &l.textures),
+        ("backgrounds", &l.backgrounds),
+    ] {
+        if let Some(d) = dir {
+            println!("{label:<12} {} {:?}", d.flag, d.dir);
+        }
+    }
+    println!(
+        "time {}  style {}  background {}",
+        l.time, l.style, l.background
+    );
+    if let Some(track) = l.music_track {
+        println!("music track  {track}");
+    }
+    println!("size         {}x{}", l.width, l.height);
+    for (label, grid) in [("tiles", &l.tiles), ("objects", &l.objects)] {
+        println!("{label}:");
+        for row in grid.chunks(l.width.max(1)) {
+            let cells: Vec<String> = row.iter().map(|v| format!("{v:>5}")).collect();
+            println!("{}", cells.join(""));
+        }
+    }
+    for (i, text) in l.signs.iter().enumerate() {
+        if !text.is_empty() {
+            println!("sign {i:<2} {text:?}");
+        }
+    }
+    Ok(())
+}
+
+fn game_from_dir(dir: &str) -> Result<Game, String> {
+    let name = Path::new(dir)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_uppercase());
+    match name.as_deref() {
+        Some("TOW") => Ok(Game::Tow),
+        Some("RTWP") => Ok(Game::Rtwp),
+        Some("WSW") => Ok(Game::Wsw),
+        _ => Err(format!("{dir}: folder must be named TOW, RTWP or WSW")),
+    }
 }
 
 /// Lists entries whose name contains `filter` (case-insensitive).

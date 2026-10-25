@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use wonderland_formats::{GameAssets, Pack};
+use wonderland_formats::{Game, GameAssets, Level, Pack};
 
 const GAMES: [&str; 3] = ["TOW", "RTWP", "WSW"];
 
@@ -43,6 +43,69 @@ fn packs_load_and_every_entry_is_readable() {
             }
         }
     }
+}
+
+/// Every level in each game's pack, plus TOW's loose bonus levels, parses with
+/// no bytes left over.
+#[test]
+fn every_level_parses() {
+    let expected = [
+        (Game::Tow, "TOW", 87 + 5),
+        (Game::Rtwp, "RTWP", 85 + 71),
+        (Game::Wsw, "WSW", 110),
+    ];
+    for (game, name, count) in expected {
+        let Some(assets) = open_game(name) else {
+            continue;
+        };
+        let mut files: Vec<(String, Vec<u8>)> = assets
+            .pack()
+            .unwrap()
+            .index()
+            .entries()
+            .iter()
+            .filter(|e| is_level(&e.name))
+            .map(|e| (e.name.clone(), assets.read(&e.name).unwrap().into_owned()))
+            .collect();
+        for entry in fs::read_dir(assets.dir()).unwrap() {
+            let file_name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            if is_level(&file_name) {
+                files.push((
+                    file_name.clone(),
+                    assets.read(&file_name).unwrap().into_owned(),
+                ));
+            }
+        }
+        assert_eq!(files.len(), count, "{name}: level count");
+        for (file, data) in files {
+            if let Err(e) = Level::parse(&data, game) {
+                panic!("{name}: {file}: {e}");
+            }
+        }
+    }
+}
+
+#[test]
+fn level_fields_match_hand_checked_values() {
+    if let Some(assets) = open_game("RTWP") {
+        let l = Level::parse(&assets.read("levels\\522.lev").unwrap(), Game::Rtwp).unwrap();
+        assert_eq!((l.version, l.map_id), (4, Some(111207919)));
+        assert_eq!(l.description, "Five Squared, Squared");
+        assert_eq!((l.time, l.style, l.background), (900, 2, 0));
+        assert_eq!((l.width, l.height, l.music_track), (39, 39, Some(2)));
+        assert_eq!((l.tile(0, 0), l.tile(2, 1), l.tile(2, 2)), (200, 300, 1300));
+    }
+    if let Some(assets) = open_game("TOW") {
+        let l = Level::parse(&assets.read("bonus1.lev").unwrap(), Game::Tow).unwrap();
+        assert_eq!((l.version, l.map_id, l.music_track), (1, None, None));
+        assert_eq!((l.description.as_str(), l.time), ("Bonus 1", 300));
+        assert_eq!((l.width, l.height, l.signs.len()), (15, 15, 5));
+    }
+}
+
+fn is_level(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    LEVEL_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
 }
 
 /// Every complete asset path written as a literal in a game's Blitz source

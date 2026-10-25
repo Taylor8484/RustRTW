@@ -8,10 +8,24 @@
 
 pub mod assets;
 pub mod blitz;
+pub mod level;
 pub mod pack;
 
 mod error;
 
 pub use assets::GameAssets;
 pub use error::{Error, Result};
+pub use level::Level;
 pub use pack::{Pack, PackEntry, PackIndex};
+
+/// One of the three games. Files shared between them are not always read the
+/// same way, so parsers that differ take the game that loads the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Game {
+    /// The Original Wonderland.
+    Tow,
+    /// Return to Wonderland Platinum.
+    Rtwp,
+    /// Wonderland Secret Worlds.
+    Wsw,
+}

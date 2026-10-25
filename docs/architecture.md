@@ -58,7 +58,9 @@ tested headless and outlive any framework upgrade or swap.
   port does not.
 - `assets` — resolves a game path the way the original does: pack first
   (case-insensitive), then a loose file in the game folder.
-- Next: level files (v1–v6), player saves (`.pla`), `options.cfg`.
+- `level` — level files v1–v6 as stored. Parsing takes the loading `Game`
+  because TOW, RTWP and WSW read the header differently.
+- Next: player saves (`.pla`), `options.cfg`.
 
 ### logic
 
