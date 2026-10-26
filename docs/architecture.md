@@ -182,7 +182,11 @@ pinned and upgraded deliberately.
   frame's events; `ScenePlugin` builds the level (`level_mesh`, `style`,
   `texture`), lights it and scrolls the water and conveyor textures;
   `CameraPlugin` follows `World::camera`; `ObjectsPlugin`,
-  `ParticlesPlugin` and `AudioPlugin` draw and play the rest.
+  `ParticlesPlugin` and `AudioPlugin` draw and play the rest; `HudPlugin`
+  draws the coin/bonus/time line and the signs in the game's bitmap font
+  (UI image nodes on `DisplayText`'s 50-column grid); `FlowPlugin`
+  restarts a lost level, moves on from a won one through a `Playlist`
+  (pack order until the campaign) and quits on Esc.
 - **Checking without a display:** `WL_SCREENSHOT=out.png[,frames]` saves
   a frame and quits; with `WL_HEADLESS=1` there is no window and the
   camera draws into a 1024x768 image. WSLg could not present a window

@@ -1,0 +1,301 @@
+//! On-screen text: the HUD (`MainGameLoop`'s `DisplayText` calls) and the
+//! signs `logic` keeps (`StartSign`, `ControlSigns` in `RTWP/text.bb`).
+//!
+//! The original draws each letter as a sprite in front of the camera on a
+//! grid 50 letters across, each letter twice as tall as wide, row 0 at the
+//! top of a 4:3 screen. The font is five 16-glyph strips (`res15.dat` to
+//! `res20.dat`, 16x32 glyphs from ASCII 32), with alpha from brightness
+//! (texture flag 2). Here each letter is a UI image node.
+
+use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+use wonderland_logic::World;
+use wonderland_logic::sign::LEVEL_NAME;
+
+use crate::camera::GameCamera;
+use crate::level::GameData;
+use crate::scene::TextureCache;
+use crate::shot::{HEADLESS_SIZE, headless};
+use crate::sim::{Sim, SimStep};
+use crate::style::TextureRef;
+
+/// One letter on the 50-column grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Letter {
+    pub ascii: u8,
+    /// Column, 0–49 (may be half a column off for centred lines).
+    pub x: f32,
+    /// Row from the top.
+    pub y: f32,
+    pub alpha: f32,
+}
+
+/// `DisplayText`: a line from column `x`.
+pub fn display_text(text: &str, x: f32, y: f32, alpha: f32) -> Vec<Letter> {
+    text.bytes()
+        .enumerate()
+        .map(|(i, ascii)| Letter {
+            ascii,
+            x: x + i as f32,
+            y,
+            alpha,
+        })
+        .collect()
+}
+
+/// `StartSign`'s layout: lines split at `#`, each centred on column 25,
+/// the first on row `y`. Ported loop for loop, so a trailing `#` is shown
+/// as a letter, as in the original.
+pub fn sign_layout(text: &str, y: f32, alpha: f32) -> Vec<Letter> {
+    let mut out = Vec::new();
+    let mut text: Vec<u8> = text.bytes().collect();
+    if text.is_empty() {
+        return out;
+    }
+    let mut y = y;
+    let mut j = 1usize;
+    let centred = |line: &[u8], y: f32, out: &mut Vec<Letter>| {
+        let start = 25.0 - line.len() as f32 / 2.0;
+        for (i, &ascii) in line.iter().enumerate() {
+            out.push(Letter {
+                ascii,
+                x: start + i as f32,
+                y,
+                alpha,
+            });
+        }
+    };
+    while j < text.len() {
+        if text[j - 1] == b'#' || j == text.len() {
+            centred(&text[..j - 1], y, &mut out);
+            y += 1.0;
+            text = text[j..].to_vec();
+            j = 0;
+        }
+        j += 1;
+    }
+    centred(&text[..j.min(text.len())], y, &mut out);
+    out
+}
+
+/// `M:SS`, as `MainGameLoop` writes the time left.
+pub fn time_string(seconds: i32) -> String {
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// The HUD lines for this tick: coins, bonus coins and the time. The coin
+/// count blinks once every coin is taken, and so does a completed bonus.
+pub fn hud_letters(w: &World) -> Vec<Letter> {
+    let mut out = Vec::new();
+    let blink_on = w.level_timer % 40 < 20;
+    let (coins_word, of) = match w.options.language {
+        1 => ("Taler: ", " von "),
+        2 => ("Sous:  ", " de "),
+        _ => ("Coins: ", " of "),
+    };
+    if w.coins > 0 || blink_on {
+        let taken = w.total_coins - w.coins;
+        out.extend(display_text(&format!("{coins_word}{taken}"), 0.0, 0.0, 1.0));
+        let x = if taken >= 10 { 9.0 } else { 8.0 };
+        out.extend(display_text(&format!("{of}{}", w.total_coins), x, 0.0, 1.0));
+    }
+    if w.total_bonus_coins > 0 && (w.bonus_coins > 0 || blink_on) {
+        let text = format!(
+            "Bonus: {} of {}",
+            w.total_bonus_coins - w.bonus_coins,
+            w.total_bonus_coins
+        );
+        out.extend(display_text(&text, 0.0, 1.0, 1.0));
+    }
+    let time = time_string(w.map_time);
+    out.extend(display_text(&time, 50.0 - time.len() as f32, 0.0, 1.0));
+    out
+}
+
+/// The level name's alpha: in over ticks 0–200, out over 600–800
+/// (`ControlSigns`).
+pub fn level_name_alpha(level_timer: i32) -> f32 {
+    let t = level_timer.min(800);
+    if t < 200 {
+        t as f32 / 200.0
+    } else if t > 600 {
+        1.0 - (t - 600) as f32 / 200.0
+    } else {
+        // The last value set before tick 200.
+        199.0 / 200.0
+    }
+}
+
+/// Every letter on screen: the signs, then the HUD.
+pub fn all_letters(w: &World) -> Vec<Letter> {
+    let mut out = Vec::new();
+    for s in w.signs_shown() {
+        let alpha = if s.tag == LEVEL_NAME {
+            level_name_alpha(w.level_timer)
+        } else {
+            s.alpha
+        };
+        out.extend(sign_layout(&s.text, s.y, alpha));
+    }
+    out.extend(hud_letters(w));
+    out
+}
+
+/// The root UI node the letters hang under.
+#[derive(Component)]
+struct HudRoot;
+
+#[derive(Component)]
+struct Glyph;
+
+/// What the letters were last drawn from.
+#[derive(Resource, Default)]
+struct Drawn {
+    letters: Vec<Letter>,
+    size: Vec2,
+    fonts: Vec<Handle<Image>>,
+}
+
+pub struct HudPlugin;
+
+impl Plugin for HudPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Drawn>()
+            .add_systems(Startup, spawn_root)
+            .add_systems(Update, draw_letters.after(SimStep));
+    }
+}
+
+fn spawn_root(mut commands: Commands) {
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        HudRoot,
+    ));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_letters(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    data: Res<GameData>,
+    mut drawn: ResMut<Drawn>,
+    mut cache: ResMut<TextureCache>,
+    mut images: ResMut<Assets<Image>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    root: Query<(Entity, Has<UiTargetCamera>), With<HudRoot>>,
+    camera: Query<Entity, With<GameCamera>>,
+    glyphs: Query<Entity, With<Glyph>>,
+) {
+    let size = match window.single() {
+        Ok(w) => Vec2::new(w.width(), w.height()),
+        Err(_) if headless() => Vec2::new(HEADLESS_SIZE.0 as f32, HEADLESS_SIZE.1 as f32),
+        Err(_) => return,
+    };
+    let letters = all_letters(&sim.world);
+    if letters == drawn.letters && size == drawn.size {
+        return;
+    }
+    let Ok((root, targeted)) = root.single() else {
+        return;
+    };
+    // The UI goes where the game camera draws, which is an image when
+    // headless.
+    if !targeted && let Ok(cam) = camera.single() {
+        commands.entity(root).insert(UiTargetCamera(cam));
+    }
+    if drawn.fonts.is_empty() {
+        drawn.fonts = (15..=20)
+            .map(|n| {
+                let r = TextureRef {
+                    path: format!("res{n}.dat"),
+                    flags: 2,
+                    rotation: 0,
+                };
+                cache.get(&r, &data, &mut images).0
+            })
+            .collect();
+    }
+    for g in &glyphs {
+        commands.entity(g).despawn();
+    }
+    // Columns are a fiftieth of the width; rows twice that, with row 0
+    // where the top of a 4:3 picture would be.
+    let cell = size.x / 50.0;
+    let top = size.y / 2.0 - 0.375 * size.x;
+    commands.entity(root).with_children(|ui| {
+        for l in &letters {
+            if l.ascii <= b' ' {
+                continue;
+            }
+            let index = (l.ascii - 32) as usize;
+            let Some(font) = drawn.fonts.get(index / 16) else {
+                continue;
+            };
+            let f = (index % 16) as f32;
+            let mut image = ImageNode::new(font.clone());
+            image.rect = Some(Rect::new(f * 16.0, 0.0, f * 16.0 + 16.0, 32.0));
+            image.color = Color::srgba(1.0, 1.0, 1.0, l.alpha);
+            ui.spawn((
+                image,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(l.x * cell),
+                    top: Val::Px(top + l.y * cell * 2.0),
+                    width: Val::Px(cell),
+                    height: Val::Px(cell * 2.0),
+                    ..default()
+                },
+                Glyph,
+            ));
+        }
+    });
+    drawn.letters = letters;
+    drawn.size = size;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(letters: &[Letter], y: f32) -> (String, f32) {
+        let row: Vec<&Letter> = letters.iter().filter(|l| l.y == y).collect();
+        (
+            row.iter().map(|l| l.ascii as char).collect(),
+            row.first().map_or(-1.0, |l| l.x),
+        )
+    }
+
+    #[test]
+    fn signs_split_and_centre_lines() {
+        let l = sign_layout("AB#CDEF", 7.0, 1.0);
+        assert_eq!(line(&l, 7.0), ("AB".into(), 24.0));
+        assert_eq!(line(&l, 8.0), ("CDEF".into(), 23.0));
+        // Odd lengths sit half a column over.
+        let l = sign_layout("ABC", 0.0, 1.0);
+        assert_eq!(line(&l, 0.0), ("ABC".into(), 23.5));
+        // A blank line between, as in the level-complete text.
+        let l = sign_layout("X# #Y", 2.0, 1.0);
+        assert_eq!(line(&l, 3.0), (" ".into(), 24.5));
+        assert_eq!(line(&l, 4.0).0, "Y");
+        // The loop stops one short, so a trailing # is shown.
+        assert_eq!(line(&sign_layout("AB#", 0.0, 1.0), 0.0).0, "AB#");
+    }
+
+    #[test]
+    fn time_reads_minutes_and_seconds() {
+        assert_eq!(time_string(125), "2:05");
+        assert_eq!(time_string(0), "0:00");
+    }
+
+    #[test]
+    fn level_name_fades() {
+        assert_eq!(level_name_alpha(0), 0.0);
+        assert_eq!(level_name_alpha(100), 0.5);
+        assert!(level_name_alpha(700) < 0.6);
+    }
+}

@@ -97,10 +97,8 @@ pub struct SimPlugin;
 
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TickAnim>().add_systems(
-            Update,
-            (step, restart_finished_levels).chain().in_set(SimStep),
-        );
+        app.init_resource::<TickAnim>()
+            .add_systems(Update, step.in_set(SimStep));
     }
 }
 
@@ -128,24 +126,6 @@ fn step(
         let events = sim.world.events().to_vec();
         sim.events.extend(events);
         anim.tick(sim.world.conveyor_active, data.ruleset.base_speed);
-    }
-}
-
-/// Until step 3.3 adds the menus: a lost level restarts and a won one
-/// starts over.
-pub fn restart_finished_levels(
-    mut sim: ResMut<Sim>,
-    data: Res<GameData>,
-    level: Res<LevelData>,
-    time: Res<Time<Real>>,
-) {
-    if !matches!(sim.world.completion, Completion::Done | Completion::Restart) {
-        return;
-    }
-    let session = sim.world.clone().into_session();
-    match Sim::start(&data, &level, session, now_ms(&time)) {
-        Ok(new) => *sim = new,
-        Err(e) => error!("{e}"),
     }
 }
 

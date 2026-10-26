@@ -1,7 +1,8 @@
 //! `wonderland [--assets <dir>] [--level <name>] [--backend <name>]`
 //!
-//! Starts a Return to Wonderland Platinum level straight away. The game
-//! data is read from `<dir>/RTWP` (default: `$WL_ASSETS`, else `assets`).
+//! Starts a Return to Wonderland Platinum level straight away and goes on
+//! through the pack's levels as each is won. Esc quits. The game data is
+//! read from `<dir>/RTWP` (default: `$WL_ASSETS`, else `assets`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -15,6 +16,7 @@ use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
 use bevy::window::ExitCondition;
 use bevy::winit::WinitPlugin;
 use wonderland_game::GamePlugins;
+use wonderland_game::flow::Playlist;
 use wonderland_game::level::{GameData, default_assets_dir};
 use wonderland_game::shot::headless;
 use wonderland_game::sim::Sim;
@@ -94,6 +96,12 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     };
+    // Until the campaign (step 4): the pack's levels in order from here.
+    let names = data.level_names();
+    let playlist = Playlist {
+        index: names.iter().position(|n| *n == name).unwrap_or(0),
+        names,
+    };
     let level = match data.load_level(&name) {
         Ok(l) => l,
         Err(e) => {
@@ -146,6 +154,7 @@ fn main() -> ExitCode {
     app.insert_resource(data)
         .insert_resource(level)
         .insert_resource(sim)
+        .insert_resource(playlist)
         .add_plugins(GamePlugins)
         .run();
     ExitCode::SUCCESS

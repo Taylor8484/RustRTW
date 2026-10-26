@@ -19,13 +19,14 @@
 //!   weather.
 //! - [`shot::ShotPlugin`]: `WL_SCREENSHOT` saves a frame and quits.
 //!
-//! Step 3.2 adds the objects, particles and sound as further plugins
-//! reading [`sim::Sim`] and its per-frame events; step 3.3 adds the HUD
-//! and the start/win/lose flow, replacing [`sim::restart_finished_levels`].
+//! - [`hud::HudPlugin`]: the coin and time display and the signs.
+//! - [`flow::FlowPlugin`]: restarts a lost level, moves on from a won one.
 
 pub mod audio;
 pub mod camera;
 pub mod coords;
+pub mod flow;
+pub mod hud;
 pub mod level;
 pub mod level_mesh;
 pub mod lighting;
@@ -52,6 +53,8 @@ impl Plugin for GamePlugins {
             objects::ObjectsPlugin,
             audio::AudioPlugin,
             particles::ParticlesPlugin,
+            hud::HudPlugin,
+            flow::FlowPlugin,
             shot::ShotPlugin,
         ));
     }
