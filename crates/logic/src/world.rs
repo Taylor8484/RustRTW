@@ -466,12 +466,33 @@ impl World {
         }
         world.lights.light_speed = 2;
         world.lights.ambient_speed = 1;
-        // ConstructLevel builds the level mesh (step 3.1).
+        world.construct_level_tiles();
         world.check_buttons();
         world.box_already_in_water();
         let name = world.level.name.clone();
         world.start_sign(&name, 16.0, LEVEL_NAME, 0.0);
         Ok(world)
+    }
+
+    /// The tile rewrites at the end of `ConstructLevel`, which otherwise
+    /// builds the level mesh (the renderer's job, from the loaded
+    /// [`Setup`]): pillars, x-floors (104), box factories (16xx) and warp
+    /// gates (22xx) become walls, and fake walls (15xx) become floor.
+    fn construct_level_tiles(&mut self) {
+        let grid = &mut self.level.grid;
+        for p in &self.pillars {
+            grid.set(p.x, p.y, 200);
+        }
+        let pass = |grid: &mut crate::Grid, f: &dyn Fn(i32) -> Option<i32>| {
+            for (x, y) in grid.cells() {
+                if let Some(t) = f(grid.get(x, y)) {
+                    grid.set(x, y, t);
+                }
+            }
+        };
+        pass(grid, &|t| (t == 104).then_some(200));
+        pass(grid, &|t| (t / 100 == 15).then_some(100));
+        pass(grid, &|t| matches!(t / 100, 16 | 22).then_some(200));
     }
 
     /// The light targets for the level as it starts, outside lightning
@@ -1003,6 +1024,15 @@ mod tests {
         let l = level(5, 2, &[100, 100], &[0, 0]);
         let err = World::start(&l, Ruleset::rtwp(), Options::default(), Session::default());
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn construct_level_rewrites_tiles() {
+        // x-floor, fake wall, box factory, warp gate, and a pillar (v5
+        // object 50) on floor.
+        let w = start(&[100, 104, 1500, 1600, 2200, 100], &[1, 0, 0, 0, 0, 50]);
+        let row: Vec<i32> = (0..6).map(|x| w.level.grid.get(x, 0)).collect();
+        assert_eq!(row, [100, 200, 100, 200, 200, 200]);
     }
 
     #[test]
