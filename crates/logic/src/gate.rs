@@ -1,7 +1,6 @@
 //! Laser gates and the final gate: `ToggleLaserGate` and the `LaserGateActive`
-//! flags `CreateLaserGate` sets (`RTWP/gameobject.bb`). Taking the last coin
-//! needs them, so they came forward from step 2.2e, which adds the buttons
-//! that toggle the coloured gates.
+//! flags `CreateLaserGate` sets (`RTWP/gameobject.bb`). The last coin opens
+//! the final gate (colour 0); buttons open and close the others.
 //!
 //! Gate tiles are 10xx: `(tile - 1000) % 50 / 2` is the colour (0 is the
 //! final gate) and 50 is added while a gate is open. The renderer shows the
@@ -60,10 +59,36 @@ impl World {
                 } else if !always_off {
                     self.level.grid.set(x, y, tile - 50);
                     set_active(self, true);
+                    self.close_gate_on(x, y);
                 } else {
                     continue;
                 }
                 self.events.push(Event::TileChanged { x, y });
+            }
+        }
+    }
+
+    /// A gate closing on `(x, y)` destroys whatever is on, or moving to or
+    /// from, that tile. Ghosts (9) pass through.
+    fn close_gate_on(&mut self, x: i32, y: i32) {
+        let hit = |ax: i32, bx: i32, ay: i32, by: i32| (ax == x || bx == x) && (ay == y || by == y);
+        for k in 1..self.players.len() {
+            let p = &self.players[k];
+            if p.exists && hit(p.x, p.x2, p.y, p.y2) {
+                self.kill_player(k);
+            }
+        }
+        for k in 0..self.blocks.len() {
+            let b = &self.blocks[k];
+            if hit(b.x, b.x2, b.y, b.y2) {
+                self.kill_box(k);
+            }
+        }
+        self.kill_fireballs_in_gate(x, y);
+        for k in 0..self.monsters.len() {
+            let m = &self.monsters[k];
+            if hit(m.x, m.x2, m.y, m.y2) && m.kind != 9 {
+                self.kill_monster(k);
             }
         }
     }

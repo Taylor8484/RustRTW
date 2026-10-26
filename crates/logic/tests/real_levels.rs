@@ -92,7 +92,7 @@ fn every_rtwp_level_starts_and_runs() {
         took_items > 30,
         "only {took_items} levels saw an item taken"
     );
-    // The rest are shut in by boxes or by gates that need buttons (2.2e).
+    // The rest are shut in, mostly by boxes and closed gates.
     assert!(
         monsters_moved > 80,
         "only {monsters_moved} levels saw monsters move"

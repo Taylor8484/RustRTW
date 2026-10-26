@@ -112,7 +112,10 @@ differences are parameters on a `Ruleset`, not separate code paths per game.
   winning the level and the level-complete sign (the language changes
   the random draws). The profile's best score comes in as
   `World::record`; `Event::LevelWon` hands the score back to be saved.
-- `gate` — `ToggleLaserGate`: the last coin opens the final gate.
+- `gate` — `ToggleLaserGate`: the last coin opens the final gate, buttons
+  the coloured ones, and a closing gate destroys what is in it.
+- `switch` — buttons (conveyor stops, gate switches, timers) and
+  teleporters.
 - `md2` — Blitz's MD2 animation state, which the player code reads.
 - `pending` — stand-ins for the object families still to port (step 2.2).
 - `world` — `World::start` (`StartLevel`) and `World::step` (`UpdateGame`

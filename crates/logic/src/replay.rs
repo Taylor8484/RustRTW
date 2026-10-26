@@ -393,8 +393,8 @@ impl Family {
         Family::Tiles,
     ];
 
-    /// The families the port covers so far (steps 2.1–2.2d).
-    pub const PORTED: [Family; 10] = [
+    /// The families the port covers so far (steps 2.1–2.2e).
+    pub const PORTED: [Family; 11] = [
         Family::Rng,
         Family::World,
         Family::Camera,
@@ -404,6 +404,7 @@ impl Family {
         Family::Factories,
         Family::Monsters,
         Family::Items,
+        Family::Switches,
         Family::Tiles,
     ];
 
@@ -682,8 +683,16 @@ impl Family {
                 }
                 v
             }
+            Family::Switches => {
+                let mut v = vec![w.buttons.len() as i32];
+                for bt in &w.buttons {
+                    v.extend([bt.kind, b(bt.active), bt.timer]);
+                }
+                v.extend(w.laser_gate_active.map(b));
+                v
+            }
             Family::Tiles => vec![tile_hash(w)],
-            Family::Switches | Family::Hazards => return None,
+            Family::Hazards => return None,
         })
     }
 }
@@ -1024,7 +1033,8 @@ mod tests {
                 s += &line('X', &Family::Factories.port_values(world).unwrap());
                 s += &line('M', &Family::Monsters.port_values(world).unwrap());
                 s += &line('I', &Family::Items.port_values(world).unwrap());
-                s += "K 0 0 0 0 0 0 0 0 0 0 0\nR 0 0 0 0 0 0 0\n";
+                s += &line('K', &Family::Switches.port_values(world).unwrap());
+                s += "R 0 0 0 0 0 0 0\n";
                 s += &line('G', &[tile_hash(world)]);
             }
             ms += 11 * keys.len() as i32;

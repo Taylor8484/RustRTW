@@ -4,7 +4,7 @@
 //! [`World::step`] runs one tick in `UpdateGame`'s order. The players are
 //! in [`crate::player`] and the signs in [`crate::sign`]; the other object
 //! families have their own modules; comments in `step` mark where the ones
-//! still to port (steps 2.2e–f) slot in.
+//! still to port (step 2.2f) slot in.
 //!
 //! The camera and lights live here too: the original moves them by fixed
 //! amounts each tick and draws random numbers for the lightning, so the
@@ -19,6 +19,7 @@ use crate::monster::{Monster, Warper};
 use crate::player::Player;
 use crate::setup::{LoadOptions, MonsterDir, Setup, Spawn};
 use crate::sign::{LEVEL_NAME, ShownSign};
+use crate::switch::Button;
 use crate::{BlitzRng, Input, Result, Ruleset};
 
 /// Settings from `options.cfg` and the menus that change the simulation.
@@ -134,6 +135,12 @@ pub enum Sound {
     Count(i32),
     /// `SFXLightning(n)`.
     Lightning(i32),
+    /// `SFXButton`: a button goes down.
+    Button,
+    /// `SFXTimerButton`: a timer button starts or restarts.
+    TimerButton,
+    /// `SFXHmmm`: a teleporter's exit is blocked.
+    Hmmm,
     /// `SFXPlayerCoin(player)`: a player takes a coin.
     Coin(usize),
     /// `SFXLastCoin`: the last coin is gone and the final gate opens.
@@ -279,6 +286,7 @@ pub struct World {
     pub bonus_coins: i32,
     /// `NofTotalBonusCoins`.
     pub total_bonus_coins: i32,
+    pub buttons: Vec<Button>,
     /// `LaserGateActive`: gates of each colour are closed.
     pub laser_gate_active: [bool; 10],
     /// The score the level-complete sign compares against, from the
@@ -373,6 +381,7 @@ impl World {
             bonus_coins: 0,
             total_bonus_coins: 0,
             laser_gate_active: [false; 10],
+            buttons: Vec::new(),
             record: None,
             conveyor_active: [true; 2],
             both_completed: 0,
@@ -435,7 +444,7 @@ impl World {
         world.lights.light_speed = 2;
         world.lights.ambient_speed = 1;
         // ConstructLevel builds the level mesh (step 3.1).
-        // 2.2e: CheckButtons().
+        world.check_buttons();
         world.box_already_in_water();
         let name = world.level.name.clone();
         world.start_sign(&name, 16.0, LEVEL_NAME, 0.0);
@@ -537,9 +546,9 @@ impl World {
                 } => self.create_monster(x, y, kind, d),
                 Spawn::Warper { x, y, kind } => self.create_warper(x, y, kind),
                 Spawn::Item { x, y, kind } => self.create_item(x, y, kind),
-                // 2.2e creates the rest of the laser gates.
                 Spawn::LaserGate { col, .. } => self.create_laser_gate(col),
-                // 2.2e–f create the other objects.
+                Spawn::Button { x, y, kind } => self.create_button(x, y, kind),
+                // 2.2f creates the other objects.
                 _ => {}
             }
         }
@@ -625,8 +634,9 @@ impl World {
             self.control_player(k);
         }
         self.control_boxes();
-        // 2.2e–f, in this order: ControlElectroTiles, ControlCannons,
-        // ControlSpikes, ControlTimerButtons.
+        // 2.2f, in this order: ControlElectroTiles, ControlCannons,
+        // ControlSpikes.
+        self.control_timer_buttons();
         self.control_monsters();
         self.control_items();
         // 2.2f: ControlFish, ControlParticles (renderer), ControlFireballs

@@ -24,6 +24,7 @@ pub mod rng;
 pub mod ruleset;
 pub mod setup;
 pub mod sign;
+pub mod switch;
 pub mod world;
 
 pub use block::{Block, Boxer, Transporter};
@@ -36,6 +37,7 @@ pub use player::{Player, Skin};
 pub use rng::BlitzRng;
 pub use ruleset::Ruleset;
 pub use setup::{Setup, Spawn};
+pub use switch::Button;
 pub use world::{Completion, Event, Options, Session, Sound, World};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
