@@ -139,9 +139,10 @@ Renders and animates the `logic` state and plays audio. Bevy's version is
 pinned and upgraded deliberately.
 
 - **Bevy 0.20.0**, pinned with `=`, default features off: only the 3D
-  renderer, window, keyboard and UI text. Its minimum Rust (1.97.1) is the
-  workspace's. Sound (`bevy_audio`, `wav`) arrives with step 3.2.
-  Textures are decoded with `image` (BMP/JPEG), not Bevy's loaders.
+  renderer, window, keyboard, UI text and WAV sound. Its minimum Rust
+  (1.97.1) is the workspace's. Building `bevy_audio` on Linux needs the
+  ALSA headers (`libasound2-dev`). Textures are decoded with `image`
+  (BMP/JPEG), not Bevy's loaders.
 - **Run:** `wonderland [--assets <dir>] [--level <name>] [--backend
   dx12|vulkan|gl]` starts an RTWP level (`intro` by default) from
   `<dir>/RTWP`, where `<dir>` defaults to `$WL_ASSETS`, else `assets`.
@@ -159,13 +160,29 @@ pinned and upgraded deliberately.
   faces are flat, so the scene uses unlit materials and sets each face
   group's colour to ambient + light × max(0, N·L), clamped, from
   `World::lights` every frame (`lighting`). The light is `Setup`'s single
-  directional light at pitch 25, yaw -25. Tonemapping is off.
+  directional light at pitch 25, yaw -25. Tonemapping is off. Objects
+  get the same formula per vertex: each object entity has its own mesh
+  whose vertex colours are rebuilt when its turn, MD2 frame or the lights
+  change (`objects`). That avoids a custom shader (Bevy 0.20 materials
+  use WESL).
+- **Objects:** `model` holds `Setup`'s model table (mesh file or Blitz
+  primitive, baked `RotateMesh`/`PositionMesh`/`ScaleMesh`/`FitMesh`, the
+  template's `ScaleEntity`/`RotateEntity`, colour, alpha, texture).
+  `objects::draws` turns the `World` into a draw list following the
+  `Create*`/`Control*` entity calls; spins and pulses the logic does not
+  keep come from `level_timer`. A pool of entities per model takes the
+  draws in order, so nothing is spawned in steady play.
+- **Particles and sound:** `logic` reports where effects happen
+  (`Event::Effect`, `Event::PlayerExploded`) and the renderer makes the
+  particles with its own random numbers (`particles`); fireball trails and
+  weather follow from the state. `audio` maps each `logic::Sound` to the
+  file `LoadSounds` loads (custom voices first) with its pitch and
+  volume. Music is not played yet.
 - **Plugins:** `SimPlugin` runs ticks from `logic::Clock` and keeps the
   frame's events; `ScenePlugin` builds the level (`level_mesh`, `style`,
   `texture`), lights it and scrolls the water and conveyor textures;
-  `CameraPlugin` follows `World::camera`; `PlaceholderPlugin` draws boxes
-  for the players until step 3.2. 3.2 and 3.3 add their own plugins
-  beside these.
+  `CameraPlugin` follows `World::camera`; `ObjectsPlugin`,
+  `ParticlesPlugin` and `AudioPlugin` draw and play the rest.
 - **Checking without a display:** `WL_SCREENSHOT=out.png[,frames]` saves
   a frame and quits; with `WL_HEADLESS=1` there is no window and the
   camera draws into a 1024x768 image. WSLg could not present a window

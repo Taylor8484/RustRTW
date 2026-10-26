@@ -12,20 +12,26 @@
 //! - [`scene::ScenePlugin`]: the level mesh, backdrop, lights and texture
 //!   scrolling.
 //! - [`camera::CameraPlugin`]: the camera from `World::camera`.
-//! - [`placeholder::PlaceholderPlugin`]: boxes standing in for players
-//!   until the objects are rendered (step 3.2).
+//! - [`objects::ObjectsPlugin`]: the players, boxes, monsters, items and
+//!   the rest, from [`model`]'s models.
+//! - [`audio::AudioPlugin`]: the sound effects.
+//! - [`particles::ParticlesPlugin`]: explosions, sparkles, trails and
+//!   weather.
 //! - [`shot::ShotPlugin`]: `WL_SCREENSHOT` saves a frame and quits.
 //!
 //! Step 3.2 adds the objects, particles and sound as further plugins
 //! reading [`sim::Sim`] and its per-frame events; step 3.3 adds the HUD
 //! and the start/win/lose flow, replacing [`sim::restart_finished_levels`].
 
+pub mod audio;
 pub mod camera;
 pub mod coords;
 pub mod level;
 pub mod level_mesh;
 pub mod lighting;
-pub mod placeholder;
+pub mod model;
+pub mod objects;
+pub mod particles;
 pub mod scene;
 pub mod shot;
 pub mod sim;
@@ -43,7 +49,9 @@ impl Plugin for GamePlugins {
             sim::SimPlugin,
             scene::ScenePlugin,
             camera::CameraPlugin,
-            placeholder::PlaceholderPlugin,
+            objects::ObjectsPlugin,
+            audio::AudioPlugin,
+            particles::ParticlesPlugin,
             shot::ShotPlugin,
         ));
     }

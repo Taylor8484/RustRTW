@@ -14,7 +14,7 @@
 
 use crate::World;
 use crate::sign::LEVEL_COMPLETE;
-use crate::world::{Completion, Event, Sound};
+use crate::world::{Completion, Effect, Event, Sound};
 
 /// One item (the `Item*` arrays).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -61,6 +61,11 @@ impl World {
             if self.items[i].kind == 1 && self.session.rng.rand(0, 100) < 5 {
                 // A rising star: three speeds and a spin.
                 self.session.rng.skip(4);
+                let it = &self.items[i];
+                self.events.push(Event::Effect {
+                    effect: Effect::ExitStar,
+                    at: [it.x as f32 + 0.5, 0.5, -(it.y as f32 + 0.5)],
+                });
             }
             let (x, y) = (self.items[i].x, self.items[i].y);
             for k in 1..self.players.len() {
@@ -80,8 +85,14 @@ impl World {
 
     /// `PickUpItem`: player `who` takes item `i`.
     pub(crate) fn pick_up_item(&mut self, i: usize, who: usize) {
+        let (x, y) = (self.items[i].x as f32, self.items[i].y as f32);
+        let sparkle = [x + 0.5, 1.0, -y - 0.2];
         match self.items[i].kind {
             0 => {
+                self.events.push(Event::Effect {
+                    effect: Effect::CoinSparkle,
+                    at: sparkle,
+                });
                 self.events.push(Event::Sound(Sound::Coin(who)));
                 // A sparkle with a random spin.
                 self.session.rng.skip(1);
@@ -99,6 +110,10 @@ impl World {
             3 => {
                 self.bonus_coins -= 1;
                 self.events.push(Event::Sound(Sound::Bonus(who)));
+                self.events.push(Event::Effect {
+                    effect: Effect::BonusSparkle,
+                    at: sparkle,
+                });
                 self.level_score += 250;
             }
             _ => {}

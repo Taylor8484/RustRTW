@@ -15,6 +15,9 @@ pub struct GameData {
     pub options: Options,
     /// `OptionsTeleport`: 1 draws every teleporter with the generic texture.
     pub teleport_option: i32,
+    /// `OptionsSoundLevel` and `OptionsMusicLevel`, 0–1.
+    pub sound_volume: f32,
+    pub music_volume: f32,
 }
 
 impl GameData {
@@ -28,7 +31,10 @@ impl GameData {
             .and_then(|d| ConfigOptions::parse(Game::Rtwp, &d).ok());
         let mut options = Options::default();
         let mut teleport_option = 0;
+        let (mut sound_volume, mut music_volume) = (1.0, 1.0);
         if let Some(c) = config {
+            sound_volume = c.sound_level as f32 / 100.0;
+            music_volume = c.music_level as f32 / 100.0;
             options.detail_level = c.detail_level.clamp(1, 5);
             options.no_time_limit = c.no_time_limit != 0;
             options.language = c.language;
@@ -40,6 +46,8 @@ impl GameData {
             ruleset: Ruleset::rtwp(),
             options,
             teleport_option,
+            sound_volume,
+            music_volume,
         })
     }
 

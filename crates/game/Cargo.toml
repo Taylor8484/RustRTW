@@ -12,8 +12,9 @@ name = "wonderland"
 path = "src/main.rs"
 
 [dependencies]
-# Only what the games use: 3D meshes, a window, the keyboard and UI text
-# for the HUD. Sound (`bevy_audio`, `wav`) comes in step 3.2. Textures
+# Only what the games use: 3D meshes, a window, the keyboard, UI text for
+# the HUD and WAV sound. Building `bevy_audio` on Linux needs the ALSA
+# headers (`libasound2-dev`). Textures
 # (BMP/JPEG) are decoded with `image` here, so Bevy's image formats stay
 # off. The camera turns tonemapping off, so its lookup tables are not
 # needed either.
@@ -41,6 +42,8 @@ bevy = { version = "=0.20.0", default-features = false, features = [
     "bevy_ui",
     "bevy_ui_render",
     "default_font",
+    "bevy_audio",
+    "wav",
 ] }
 # PNG only for `WL_SCREENSHOT`.
 image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png"] }

@@ -16,7 +16,7 @@
 //! runs its control at (0, 0) that tick, hitting a player standing there.
 
 use crate::World;
-use crate::world::Sound;
+use crate::world::{Effect, Event, Sound};
 
 /// `Const MaxMonsters`; warpers stop at 10 below it.
 const MAX_MONSTERS: usize = 600;
@@ -325,10 +325,18 @@ impl World {
             if item.kind == 0 && (kind == 10 || stinker) {
                 // One particle with a random spin.
                 self.session.rng.skip(1);
+                self.events.push(Event::Effect {
+                    effect: Effect::CoinSparkle,
+                    at: [x as f32 + 0.5, 1.0, -(y as f32) - 0.2],
+                });
                 self.play_at_monster(Sound::Single(15), i);
                 self.take_coin(j);
             } else if item.kind == 3 && stinker {
                 self.play_at_monster(Sound::Single(15), i);
+                self.events.push(Event::Effect {
+                    effect: Effect::BonusSparkle,
+                    at: [x as f32 + 0.5, 1.0, -(y as f32) - 0.2],
+                });
                 self.level_score += 250;
                 self.take_bonus_coin(j);
             } else {
@@ -430,6 +438,12 @@ impl World {
 
         // Explosion particles, each drawing a velocity and a spin: one
         // kind for saucers and z-bots, two for the rest.
+        if kind != 0 {
+            self.events.push(Event::Effect {
+                effect: Effect::Burst(kind),
+                at: self.monsters[i].position,
+            });
+        }
         let detail = usize::try_from(self.options.detail_level).unwrap_or(0);
         match kind {
             5 | 6 => {
@@ -586,6 +600,10 @@ impl World {
             if m.dying_timer == 0 {
                 let detail = usize::try_from(self.options.detail_level).unwrap_or(0);
                 self.session.rng.skip(8 * 7 * detail);
+                self.events.push(Event::Effect {
+                    effect: Effect::Burst(5),
+                    at: self.monsters[i].position,
+                });
                 self.play_at_monster(Sound::BombExplode, i);
                 self.monsters[i].dead = true;
             }

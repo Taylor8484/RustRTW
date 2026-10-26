@@ -41,7 +41,7 @@ pub use ruleset::Ruleset;
 pub use scenery::{Fish, Pillar};
 pub use setup::{Setup, Spawn};
 pub use switch::Button;
-pub use world::{Completion, Event, Options, Session, Sound, World};
+pub use world::{Completion, Effect, Event, Options, Session, Sound, World};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

@@ -12,7 +12,7 @@
 //! to x = 101, off the level, and stays in the list.
 
 use crate::World;
-use crate::world::{Event, Sound};
+use crate::world::{Effect, Event, Sound};
 
 /// `Const MaxBoxes`.
 const MAX_BOXES: usize = 400;
@@ -523,6 +523,10 @@ impl World {
         // 7*DetailLevel splinters, each drawing a velocity and a spin.
         let splinters = usize::try_from(7 * self.options.detail_level).unwrap_or(0);
         self.session.rng.skip(4 * splinters);
+        self.events.push(Event::Effect {
+            effect: Effect::Splinters(kind),
+            at: self.blocks[i].position,
+        });
 
         if kind == 6 {
             let (cx, cy) = self.blocks[i].nearest_tile();

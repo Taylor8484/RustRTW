@@ -185,6 +185,12 @@ pub enum Event {
         x: i32,
         y: i32,
     },
+    /// A particle effect at a Blitz position. The simulation has drawn
+    /// its random numbers; the renderer makes its own.
+    Effect {
+        effect: Effect,
+        at: [f32; 3],
+    },
     /// The last player left through the exit. The original stores `score`
     /// in the profile if it beats the best, marks the level perfect when
     /// no bonus coin is left, and saves the profile.
@@ -192,6 +198,21 @@ pub enum Event {
         score: i32,
         perfect: bool,
     },
+}
+
+/// The particle effects the original creates (`CreateParticle` calls).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// `KillBox`: splinters of a box of this type.
+    Splinters(i32),
+    /// `KillMonster` (and a saucer landing): an explosion for this type.
+    Burst(i32),
+    /// A star rising from the exit gate.
+    ExitStar,
+    /// A coin taken.
+    CoinSparkle,
+    /// A bonus coin taken.
+    BonusSparkle,
 }
 
 /// The camera in Blitz coordinates (x right, y up, z = -row).
