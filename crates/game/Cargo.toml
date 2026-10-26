@@ -1,0 +1,56 @@
+[package]
+name = "wonderland-game"
+description = "The Wonderland Classic games on Bevy"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "wonderland"
+path = "src/main.rs"
+
+[dependencies]
+# Only what the games use: 3D meshes, a window, the keyboard and UI text
+# for the HUD. Sound (`bevy_audio`, `wav`) comes in step 3.2. Textures
+# (BMP/JPEG) are decoded with `image` here, so Bevy's image formats stay
+# off. The camera turns tonemapping off, so its lookup tables are not
+# needed either.
+bevy = { version = "=0.20.0", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "async_executor",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_state",
+    "bevy_winit",
+    "x11",
+    "wayland",
+    "keyboard",
+    "bevy_window",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_light",
+    "bevy_camera",
+    "bevy_color",
+    "bevy_mesh",
+    "bevy_image",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_ui_render",
+    "default_font",
+] }
+# PNG only for `WL_SCREENSHOT`.
+image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png"] }
+wonderland-formats = { path = "../formats" }
+wonderland-logic = { path = "../logic" }
+
+# wgpu's OpenGL backend, the last fallback on Linux (on Windows it would
+# need ANGLE, so Vulkan is the fallback there).
+[target.'cfg(target_os = "linux")'.dependencies]
+bevy_render = { version = "=0.20.0", default-features = false, features = ["gles"] }
+
+[lints]
+workspace = true
