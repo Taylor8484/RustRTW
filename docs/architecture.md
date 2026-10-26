@@ -138,6 +138,39 @@ them in a launcher, then loads the selected game's definition and assets.
 Renders and animates the `logic` state and plays audio. Bevy's version is
 pinned and upgraded deliberately.
 
+- **Bevy 0.20.0**, pinned with `=`, default features off: only the 3D
+  renderer, window, keyboard and UI text. Its minimum Rust (1.97.1) is the
+  workspace's. Sound (`bevy_audio`, `wav`) arrives with step 3.2.
+  Textures are decoded with `image` (BMP/JPEG), not Bevy's loaders.
+- **Run:** `wonderland [--assets <dir>] [--level <name>] [--backend
+  dx12|vulkan|gl]` starts an RTWP level (`intro` by default) from
+  `<dir>/RTWP`, where `<dir>` defaults to `$WL_ASSETS`, else `assets`.
+- **Renderer:** DX12 on Windows with Vulkan as the fallback, and Vulkan on
+  Linux with OpenGL as the fallback. Both are passed to wgpu, which takes
+  the first that works. wgpu's OpenGL on Windows needs ANGLE, so it is
+  not offered there. `--backend` or `WGPU_BACKEND` overrides the choice.
+- **Coordinates:** `logic` and the scene builders work in Blitz
+  coordinates; `coords` negates z on the way to Bevy and reverses each
+  triangle's winding, since the picture stays the same and Blitz's front
+  faces are clockwise. Blitz pitch/yaw become a rotation, and
+  `CameraZoom` becomes a vertical field of view from the horizontal one
+  Blitz keeps fixed (zoom 1 is 90° across).
+- **Lighting:** Blitz lights per vertex (Direct3D 7 fixed pipeline). Level
+  faces are flat, so the scene uses unlit materials and sets each face
+  group's colour to ambient + light × max(0, N·L), clamped, from
+  `World::lights` every frame (`lighting`). The light is `Setup`'s single
+  directional light at pitch 25, yaw -25. Tonemapping is off.
+- **Plugins:** `SimPlugin` runs ticks from `logic::Clock` and keeps the
+  frame's events; `ScenePlugin` builds the level (`level_mesh`, `style`,
+  `texture`), lights it and scrolls the water and conveyor textures;
+  `CameraPlugin` follows `World::camera`; `PlaceholderPlugin` draws boxes
+  for the players until step 3.2. 3.2 and 3.3 add their own plugins
+  beside these.
+- **Checking without a display:** `WL_SCREENSHOT=out.png[,frames]` saves
+  a frame and quits; with `WL_HEADLESS=1` there is no window and the
+  camera draws into a 1024x768 image. WSLg could not present a window
+  here (Wayland dropped the connection, GL had no present mode).
+
 ## Porting notes (Blitz3D semantics)
 
 Behaviours that silently break a line-by-line translation:

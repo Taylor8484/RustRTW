@@ -1,0 +1,166 @@
+//! Runs the simulation: each frame asks `logic::Clock` how many ticks have
+//! passed on the real clock, as `MainGameLoop` does, reads the keyboard and
+//! steps the world that many times.
+
+use bevy::prelude::*;
+use wonderland_logic::{Clock, Completion, Event, Input, Session, World};
+
+use crate::level::{GameData, LevelData};
+
+/// The level in play.
+#[derive(Resource)]
+pub struct Sim {
+    pub world: World,
+    clock: Clock,
+    /// Ticks run this frame.
+    pub ticks: u32,
+    /// How far into the next tick this frame is drawn (0–1). The original
+    /// renders with `RenderWorld(tween)`; interpolating needs the previous
+    /// tick's state, which the renderer does not keep yet.
+    pub tween: f32,
+    /// The events of every tick run this frame, in order.
+    pub events: Vec<Event>,
+}
+
+impl Sim {
+    /// `StartLevel` for `level`, carrying `session` over.
+    pub fn start(
+        data: &GameData,
+        level: &LevelData,
+        session: Session,
+        now_ms: i64,
+    ) -> Result<Self, String> {
+        let world = World::start(&level.level, data.ruleset.clone(), data.options, session)
+            .map_err(|e| format!("{}: {e}", level.name))?;
+        let events = world.events().to_vec();
+        Ok(Self {
+            world,
+            clock: Clock::new(&data.ruleset, now_ms),
+            ticks: 0,
+            tween: 0.0,
+            events,
+        })
+    }
+}
+
+/// Texture scrolling `UpdateGame` does each tick, kept as the original's
+/// float accumulators so the drift matches.
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct TickAnim {
+    /// `WaterTexU`, `WaterTexV`: the water and lava scroll, and the sky.
+    pub water: [f32; 2],
+    /// `ConveyorTex(1)`, `(2)`: how far each conveyor set has scrolled.
+    pub conveyor: [f32; 2],
+}
+
+impl TickAnim {
+    /// One tick's worth, as in `UpdateGame`.
+    pub fn tick(&mut self, conveyor_active: [bool; 2], base_speed: i32) {
+        self.water[0] += 0.001;
+        self.water[1] += 0.0005;
+        // `If WaterTexU = 1.0`: exact, so in practice it never wraps.
+        for w in &mut self.water {
+            if *w == 1.0 {
+                *w = 0.0;
+            }
+        }
+        for (c, active) in self.conveyor.iter_mut().zip(conveyor_active) {
+            if active {
+                *c += 1.0 / base_speed as f32 * 2.0;
+                if *c >= 1.0 {
+                    *c -= 1.0;
+                }
+            }
+        }
+    }
+}
+
+/// The keys `UpdateGame` reads: arrows (or the keypad), Shift for the free
+/// camera, Return to switch player.
+pub fn read_input(keys: &ButtonInput<KeyCode>) -> Input {
+    let any = |k: &[KeyCode]| k.iter().any(|&k| keys.pressed(k));
+    Input {
+        up: any(&[KeyCode::ArrowUp, KeyCode::Numpad8]),
+        down: any(&[KeyCode::ArrowDown, KeyCode::Numpad2]),
+        left: any(&[KeyCode::ArrowLeft, KeyCode::Numpad4]),
+        right: any(&[KeyCode::ArrowRight, KeyCode::Numpad6]),
+        camera: any(&[KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+        switch: any(&[KeyCode::Enter, KeyCode::NumpadEnter]),
+    }
+}
+
+/// Runs in `Update` before anything that reads the world.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SimStep;
+
+pub struct SimPlugin;
+
+impl Plugin for SimPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<TickAnim>().add_systems(
+            Update,
+            (step, restart_finished_levels).chain().in_set(SimStep),
+        );
+    }
+}
+
+fn now_ms(time: &Time<Real>) -> i64 {
+    time.elapsed().as_millis() as i64
+}
+
+fn step(
+    mut sim: ResMut<Sim>,
+    mut anim: ResMut<TickAnim>,
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time<Real>>,
+    data: Res<GameData>,
+) {
+    let frame = sim.clock.advance(now_ms(&time));
+    let input = read_input(&keys);
+    sim.events.clear();
+    sim.ticks = frame.ticks;
+    sim.tween = frame.tween;
+    for _ in 0..frame.ticks {
+        if matches!(sim.world.completion, Completion::Done | Completion::Restart) {
+            break;
+        }
+        sim.world.step(input);
+        let events = sim.world.events().to_vec();
+        sim.events.extend(events);
+        anim.tick(sim.world.conveyor_active, data.ruleset.base_speed);
+    }
+}
+
+/// Until step 3.3 adds the menus: a lost level restarts and a won one
+/// starts over.
+pub fn restart_finished_levels(
+    mut sim: ResMut<Sim>,
+    data: Res<GameData>,
+    level: Res<LevelData>,
+    time: Res<Time<Real>>,
+) {
+    if !matches!(sim.world.completion, Completion::Done | Completion::Restart) {
+        return;
+    }
+    let session = sim.world.clone().into_session();
+    match Sim::start(&data, &level, session, now_ms(&time)) {
+        Ok(new) => *sim = new,
+        Err(e) => error!("{e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conveyors_scroll_a_tile_in_twelve_ticks() {
+        let mut a = TickAnim::default();
+        for _ in 0..12 {
+            a.tick([true, false], 24);
+        }
+        assert!(a.conveyor[0] < 1e-5 || a.conveyor[0] > 0.99999);
+        assert_eq!(a.conveyor[1], 0.0);
+        assert!((a.water[0] - 0.012).abs() < 1e-6);
+    }
+}
