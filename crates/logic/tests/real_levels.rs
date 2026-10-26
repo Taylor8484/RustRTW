@@ -43,12 +43,17 @@ fn every_rtwp_level_starts_and_runs() {
     let mut session = Session::default();
     let mut walked = 0;
     let (mut with_monsters, mut monsters_moved) = (0, 0);
+    let (mut with_exit, mut took_items) = (0, 0);
     for name in names {
         let level = Level::parse(&assets.read(&name).unwrap(), Game::Rtwp).unwrap();
         let mut world = World::start(&level, Ruleset::rtwp(), Options::default(), session)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         let start = world.players.clone();
         let monsters = world.monsters.clone();
+        let items = world.items.len();
+        if world.items.iter().any(|it| it.kind == 1) {
+            with_exit += 1;
+        }
         let replay = world.clone();
         for &input in &inputs {
             world.step(input);
@@ -74,11 +79,19 @@ fn every_rtwp_level_starts_and_runs() {
                 monsters_moved += 1;
             }
         }
+        if world.items.len() < items || world.both_completed != 0 {
+            took_items += 1;
+        }
         session = world.into_session();
     }
     eprintln!("{walked} levels saw a player move");
     eprintln!("{monsters_moved} of {with_monsters} levels with monsters saw them move");
+    eprintln!("{took_items} levels saw an item taken; {with_exit} have an exit");
     assert!(walked > 120, "only {walked} levels saw a player move");
+    assert!(
+        took_items > 30,
+        "only {took_items} levels saw an item taken"
+    );
     // The rest are shut in by boxes or by gates that need buttons (2.2e).
     assert!(
         monsters_moved > 80,

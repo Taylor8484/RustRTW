@@ -3,8 +3,8 @@
 //!
 //! [`World::step`] runs one tick in `UpdateGame`'s order. The players are
 //! in [`crate::player`] and the signs in [`crate::sign`]; the other object
-//! families (boxes, monsters, items, switches and the rest) arrive in steps
-//! 2.2b–f, and comments in `step` mark where each slots in.
+//! families have their own modules; comments in `step` mark where the ones
+//! still to port (steps 2.2e–f) slot in.
 //!
 //! The camera and lights live here too: the original moves them by fixed
 //! amounts each tick and draws random numbers for the lightning, so the
@@ -14,8 +14,8 @@
 use wonderland_formats::Level;
 
 use crate::block::{Block, Boxer, Transporter};
+use crate::item::Item;
 use crate::monster::{Monster, Warper};
-use crate::pending::Item;
 use crate::player::Player;
 use crate::setup::{LoadOptions, MonsterDir, Setup, Spawn};
 use crate::sign::{LEVEL_NAME, ShownSign};
@@ -33,6 +33,9 @@ pub struct Options {
     /// positional sound then nudges the camera by float rounding, so it
     /// can change the free camera's limits.
     pub sound: bool,
+    /// `Language`: 0 English, 1 German, 2 French. Only English draws a
+    /// random number for the level-complete praise.
+    pub language: i32,
     pub load: LoadOptions,
 }
 
@@ -42,6 +45,7 @@ impl Default for Options {
             detail_level: 3,
             no_time_limit: false,
             sound: true,
+            language: 0,
             load: LoadOptions {
                 style: None,
                 background: None,
@@ -130,6 +134,16 @@ pub enum Sound {
     Count(i32),
     /// `SFXLightning(n)`.
     Lightning(i32),
+    /// `SFXPlayerCoin(player)`: a player takes a coin.
+    Coin(usize),
+    /// `SFXLastCoin`: the last coin is gone and the final gate opens.
+    LastCoin,
+    /// `SFXPlayerClock(player)`.
+    Clock(usize),
+    /// `SFXPlayerBonus(player)`.
+    Bonus(usize),
+    /// `SFXPlayerEnd(player)`: a player leaves through the exit.
+    Exit(usize),
     /// `SFXLevelLose`: the level is lost.
     Lose(LoseSound),
 }
@@ -162,6 +176,13 @@ pub enum Event {
     TileChanged {
         x: i32,
         y: i32,
+    },
+    /// The last player left through the exit. The original stores `score`
+    /// in the profile if it beats the best, marks the level perfect when
+    /// no bonus coin is left, and saves the profile.
+    LevelWon {
+        score: i32,
+        perfect: bool,
     },
 }
 
@@ -248,8 +269,24 @@ pub struct World {
     /// Monsters, in creation order.
     pub monsters: Vec<Monster>,
     pub warpers: Vec<Warper>,
-    /// Coins, gates, clocks and bonus coins, in creation order (2.2d).
+    /// Coins, exit gates, clocks and bonus coins, in creation order.
     pub items: Vec<Item>,
+    /// `NofCrystals`: coins left. The final gate opens when it reaches 0.
+    pub coins: i32,
+    /// `NofTotalCrystals`.
+    pub total_coins: i32,
+    /// `NofBonusCoins`: bonus coins left.
+    pub bonus_coins: i32,
+    /// `NofTotalBonusCoins`.
+    pub total_bonus_coins: i32,
+    /// `LaserGateActive`: gates of each colour are closed.
+    pub laser_gate_active: [bool; 10],
+    /// The score the level-complete sign compares against, from the
+    /// player's profile: the best score when above 0 for a campaign level,
+    /// or the last score of a custom level played before. The original
+    /// shows the comparison for custom levels in English only, so leave it
+    /// `None` there in other languages. Set it after [`World::start`].
+    pub record: Option<i32>,
     /// `ConveyorActive(1)` and `(2)`: conveyor tiles 5x0–5x7 and 5x8 up.
     pub conveyor_active: [bool; 2],
     /// `BothCompleted`: bit `k - 1` is set once player `k` has left through
@@ -331,6 +368,12 @@ impl World {
             level_score: 0,
             chomp_pitch: 0,
             items: Vec::new(),
+            coins: 0,
+            total_coins: 0,
+            bonus_coins: 0,
+            total_bonus_coins: 0,
+            laser_gate_active: [false; 10],
+            record: None,
             conveyor_active: [true; 2],
             both_completed: 0,
             end_move_trampoline: false,
@@ -367,6 +410,8 @@ impl World {
             session,
         };
         world.create_objects();
+        world.total_coins = world.coins;
+        world.total_bonus_coins = world.bonus_coins;
         world.focus_first_player()?;
 
         // StartLevel, after LoadLevel.
@@ -491,7 +536,10 @@ impl World {
                     kind,
                 } => self.create_monster(x, y, kind, d),
                 Spawn::Warper { x, y, kind } => self.create_warper(x, y, kind),
-                // 2.2d–f create the other objects.
+                Spawn::Item { x, y, kind } => self.create_item(x, y, kind),
+                // 2.2e creates the rest of the laser gates.
+                Spawn::LaserGate { col, .. } => self.create_laser_gate(col),
+                // 2.2e–f create the other objects.
                 _ => {}
             }
         }
@@ -580,8 +628,9 @@ impl World {
         // 2.2e–f, in this order: ControlElectroTiles, ControlCannons,
         // ControlSpikes, ControlTimerButtons.
         self.control_monsters();
-        // 2.2d, 2.2f: ControlItems, ControlFish, ControlParticles
-        // (renderer), ControlFireballs again.
+        self.control_items();
+        // 2.2f: ControlFish, ControlParticles (renderer), ControlFireballs
+        // again.
         self.control_boxers();
         self.control_warpers();
 
@@ -597,7 +646,7 @@ impl World {
         self.clean_up_boxes();
         // 2.2f: CleanUpFireballs.
         self.clean_up_monsters();
-        // 2.2d: CleanUpItems.
+        self.clean_up_items();
 
         self.swoop_camera();
         // Water, conveyor and laser gate animation: renderer (step 3.2).

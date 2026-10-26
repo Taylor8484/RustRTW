@@ -15,7 +15,7 @@
 //!
 //! - `WLREC 1 RTWP`: the header.
 //! - `S seed detail sound_exists sound_level_bits no_time_limit
-//!   classic_death_sound menu_style menu_bkg level path`: the top of
+//!   classic_death_sound menu_style menu_bkg language level path`: the top of
 //!   `StartLevel`. `seed` is `RndSeed()`; the path is the rest of the line.
 //!   Each `S` starts a new run (a level, or a restart of it).
 //! - `s seed map_milli_time`: the end of `StartLevel`.
@@ -90,6 +90,8 @@ pub struct Start {
     pub menu_style: i32,
     /// `MenuBkg`, -1 when unset.
     pub menu_bkg: i32,
+    /// `Language`.
+    pub language: i32,
     /// `CurrentLevel`; -999 for a custom level.
     pub level: i32,
     /// The file `LoadLevel` read, as the game names it.
@@ -101,6 +103,7 @@ impl Start {
         Options {
             detail_level: self.detail_level,
             no_time_limit: self.no_time_limit,
+            language: self.language,
             sound: self.sound_exists && self.sound_level > 0.0,
             load: LoadOptions {
                 style: (self.menu_style != -1).then_some(self.menu_style),
@@ -246,8 +249,8 @@ impl Recording {
                 }
             };
             if tag == "S" {
-                let fields: Vec<&str> = rest.splitn(10, ' ').collect();
-                if fields.len() != 10 {
+                let fields: Vec<&str> = rest.splitn(11, ' ').collect();
+                if fields.len() != 11 {
                     return Err(err("S: too few fields".into()));
                 }
                 let int = |i: usize| -> Result<i32, ParseError> {
@@ -265,8 +268,9 @@ impl Recording {
                         classic_death_sound: int(5)?,
                         menu_style: int(6)?,
                         menu_bkg: int(7)?,
-                        level: int(8)?,
-                        path: fields[9].to_string(),
+                        language: int(8)?,
+                        level: int(9)?,
+                        path: fields[10].to_string(),
                     },
                     started: None,
                     frames: vec![Frame::default()],
@@ -389,8 +393,8 @@ impl Family {
         Family::Tiles,
     ];
 
-    /// The families the port covers so far (steps 2.1–2.2c).
-    pub const PORTED: [Family; 9] = [
+    /// The families the port covers so far (steps 2.1–2.2d).
+    pub const PORTED: [Family; 10] = [
         Family::Rng,
         Family::World,
         Family::Camera,
@@ -399,6 +403,7 @@ impl Family {
         Family::Boxes,
         Family::Factories,
         Family::Monsters,
+        Family::Items,
         Family::Tiles,
     ];
 
@@ -517,7 +522,11 @@ impl Family {
                 ],
             )],
             Family::Items => &[
-                Fields(&[("coins_left", Int), ("bonus_coins_left", Int)]),
+                Fields(&[
+                    ("coins_left", Int),
+                    ("bonus_coins_left", Int),
+                    ("level_score", Int),
+                ]),
                 Group("item", 0, &[("kind", Int), ("x", Int), ("y", Int)]),
             ],
             Family::Switches => &[
@@ -666,8 +675,15 @@ impl Family {
                 }
                 v
             }
+            Family::Items => {
+                let mut v = vec![w.coins, w.bonus_coins, w.level_score, w.items.len() as i32];
+                for it in &w.items {
+                    v.extend([it.kind, it.x, it.y]);
+                }
+                v
+            }
             Family::Tiles => vec![tile_hash(w)],
-            Family::Items | Family::Switches | Family::Hazards => return None,
+            Family::Switches | Family::Hazards => return None,
         })
     }
 }
@@ -973,7 +989,7 @@ mod tests {
     /// Writes ticks the way `recorder.bb` would, from the port itself.
     fn record(world: &mut World, frames: &[&[Input]], start_seed: i32) -> String {
         let mut s = format!(
-            "WLREC 1 RTWP\nS {start_seed} 3 1 {} 0 0 -1 -1 7 level 7.lev\ns {} 5000\n",
+            "WLREC 1 RTWP\nS {start_seed} 3 1 {} 0 0 -1 -1 0 7 level 7.lev\ns {} 5000\n",
             1.0f32.to_bits() as i32,
             world.session.rng.seed()
         );
@@ -1007,7 +1023,8 @@ mod tests {
                 s += &line('B', &v);
                 s += &line('X', &Family::Factories.port_values(world).unwrap());
                 s += &line('M', &Family::Monsters.port_values(world).unwrap());
-                s += "I 0 0 0\nK 0 0 0 0 0 0 0 0 0 0 0\nR 0 0 0 0 0 0 0\n";
+                s += &line('I', &Family::Items.port_values(world).unwrap());
+                s += "K 0 0 0 0 0 0 0 0 0 0 0\nR 0 0 0 0 0 0 0\n";
                 s += &line('G', &[tile_hash(world)]);
             }
             ms += 11 * keys.len() as i32;
@@ -1027,12 +1044,12 @@ mod tests {
     #[test]
     fn parses_runs_frames_and_ticks() {
         let text = "WLREC 1 RTWP\r\n\
-            S 4660 3 1 1065353216 0 2 -1 4 12 levels\\a b.lev\r\n\
+            S 4660 3 1 1065353216 0 2 -1 4 1 12 levels\\a b.lev\r\n\
             s 999 1000\r\n\
             T 1 999 65 1000\r\nW 1 2\r\nP 1 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18\r\n\
             F 1 1011\r\n\
             T 2 1000 1 1001\r\nG 7\r\nF 1 -1\r\n\
-            S 1 3 0 0 1 0 -1 -1 -999 CustomLevels\\x.lv5\r\n";
+            S 1 3 0 0 1 0 -1 -1 0 -999 CustomLevels\\x.lv5\r\n";
         let r = Recording::parse(text).unwrap();
         assert_eq!(r.runs.len(), 2);
         let run = &r.runs[0];
@@ -1040,6 +1057,7 @@ mod tests {
         assert_eq!(run.start.sound_level, 1.0);
         assert_eq!(run.start.options().load.background, Some(4));
         assert_eq!(run.start.session().classic_death_sound, 2);
+        assert_eq!(run.start.options().language, 1);
         assert_eq!(
             run.started,
             Some(Started {
@@ -1066,9 +1084,9 @@ mod tests {
         assert!(Recording::parse("hello").is_err());
         let e = Recording::parse("WLREC 1 RTWP\nT 1 2 3 4\n").unwrap_err();
         assert_eq!(e.line, 2);
-        let e = Recording::parse("WLREC 1 RTWP\nS 1 3 1 0 0 0 -1 -1 1 a\nT 1 2 x 4\n");
+        let e = Recording::parse("WLREC 1 RTWP\nS 1 3 1 0 0 0 -1 -1 0 1 a\nT 1 2 x 4\n");
         assert!(e.unwrap_err().msg.contains("T"));
-        let e = Recording::parse("WLREC 1 RTWP\nS 1 3 1 0 0 0 -1 -1 1 a\nT 1 2 3 4\nF 2 0\n");
+        let e = Recording::parse("WLREC 1 RTWP\nS 1 3 1 0 0 0 -1 -1 0 1 a\nT 1 2 3 4\nF 2 0\n");
         assert!(e.unwrap_err().msg.contains("2 ticks"));
     }
 
@@ -1145,7 +1163,7 @@ mod tests {
         let time = w.map_time;
         // 20-tick frames 230 ms apart: a second has passed at the fifth
         // check, on tick 100, where the simulated clock says tick 92.
-        let mut s = String::from("WLREC 1 RTWP\nS 0 3 1 0 0 0 -1 -1 1 a\ns 0 1000\n");
+        let mut s = String::from("WLREC 1 RTWP\nS 0 3 1 0 0 0 -1 -1 0 1 a\ns 0 1000\n");
         for f in 1..=5 {
             s += &"T 0 0 0 0\n".repeat(20);
             s += &format!("F 20 {}\n", 1000 + 230 * f);

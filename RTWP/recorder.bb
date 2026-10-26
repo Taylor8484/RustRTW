@@ -51,7 +51,7 @@ Function RecStartLevel(Level)
 	Else
 		path$="levels\"+WorldLevelName$(Level)
 	EndIf
-	WriteLine RecFile,"S "+RndSeed()+" "+DetailLevel+" "+DoesSoundExist+" "+RecBits(OptionsSoundLevel)+" "+NoTimeLimit+" "+ClassicDeathSound+" "+MenuStyle+" "+MenuBkg+" "+Level+" "+path$
+	WriteLine RecFile,"S "+RndSeed()+" "+DetailLevel+" "+DoesSoundExist+" "+RecBits(OptionsSoundLevel)+" "+NoTimeLimit+" "+ClassicDeathSound+" "+MenuStyle+" "+MenuBkg+" "+Language+" "+Level+" "+path$
 End Function
 
 ; At the end of StartLevel.
@@ -121,7 +121,7 @@ Function RecTickEnd()
 	Next
 	WriteLine f,s$
 
-	s$="I "+NofCrystals+" "+NofBonusCoins+" "+NofItems
+	s$="I "+NofCrystals+" "+NofBonusCoins+" "+CurrentLevelScore+" "+NofItems
 	For i=0 To NofItems-1
 		s$=s$+" "+ItemType(i)+" "+ItemX(i)+" "+ItemY(i)
 	Next

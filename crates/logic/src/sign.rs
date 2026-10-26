@@ -20,6 +20,8 @@ pub struct ShownSign {
     pub alpha: f32,
 }
 
+/// The level-complete tag.
+pub const LEVEL_COMPLETE: i32 = 2;
 /// The level-name tag.
 pub const LEVEL_NAME: i32 = 10;
 /// The first level-sign tag; sign tile `i` uses `FIRST_SIGN + i`.

@@ -11,8 +11,10 @@
 
 pub mod block;
 pub mod clock;
+mod gate;
 pub mod grid;
 pub mod input;
+pub mod item;
 pub mod md2;
 pub mod monster;
 mod pending;
@@ -28,8 +30,8 @@ pub use block::{Block, Boxer, Transporter};
 pub use clock::{Clock, Frame};
 pub use grid::Grid;
 pub use input::Input;
+pub use item::Item;
 pub use monster::{Monster, Warper};
-pub use pending::Item;
 pub use player::{Player, Skin};
 pub use rng::BlitzRng;
 pub use ruleset::Ruleset;
