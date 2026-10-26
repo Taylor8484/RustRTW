@@ -393,8 +393,8 @@ impl Family {
         Family::Tiles,
     ];
 
-    /// The families the port covers so far (steps 2.1–2.2e).
-    pub const PORTED: [Family; 11] = [
+    /// The families the port covers so far (all of step 2.2).
+    pub const PORTED: [Family; 12] = [
         Family::Rng,
         Family::World,
         Family::Camera,
@@ -405,6 +405,7 @@ impl Family {
         Family::Monsters,
         Family::Items,
         Family::Switches,
+        Family::Hazards,
         Family::Tiles,
     ];
 
@@ -691,8 +692,24 @@ impl Family {
                 v.extend(w.laser_gate_active.map(b));
                 v
             }
+            Family::Hazards => {
+                // The recorder zeroes timers of electro types not in the
+                // level, which keep earlier levels' values in the original.
+                let mut v: Vec<i32> = w.electros[..4]
+                    .iter()
+                    .map(|e| if e.exists { e.timer } else { 0 })
+                    .collect();
+                v.push(w.spikes.len() as i32);
+                v.extend(w.spikes.iter().map(|s| s.timer));
+                v.push(w.cannons.len() as i32);
+                v.extend(w.cannons.iter().map(|c| c.timer));
+                v.push(w.fireballs().len() as i32);
+                for f in w.fireballs() {
+                    v.extend([f.x, f.y, b(f.dead)]);
+                }
+                v
+            }
             Family::Tiles => vec![tile_hash(w)],
-            Family::Hazards => return None,
         })
     }
 }
@@ -1034,7 +1051,7 @@ mod tests {
                 s += &line('M', &Family::Monsters.port_values(world).unwrap());
                 s += &line('I', &Family::Items.port_values(world).unwrap());
                 s += &line('K', &Family::Switches.port_values(world).unwrap());
-                s += "R 0 0 0 0 0 0 0\n";
+                s += &line('R', &Family::Hazards.port_values(world).unwrap());
                 s += &line('G', &[tile_hash(world)]);
             }
             ms += 11 * keys.len() as i32;

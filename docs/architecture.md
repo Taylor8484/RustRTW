@@ -116,8 +116,10 @@ differences are parameters on a `Ruleset`, not separate code paths per game.
   the coloured ones, and a closing gate destroys what is in it.
 - `switch` — buttons (conveyor stops, gate switches, timers) and
   teleporters.
+- `hazard` — electro tiles, spikes, cannons and fireballs. Fireballs are
+  kept as the original's array slots, stale entries included.
+- `scenery` — fish and pillars, which draw random numbers when created.
 - `md2` — Blitz's MD2 animation state, which the player code reads.
-- `pending` — stand-ins for the object families still to port (step 2.2).
 - `world` — `World::start` (`StartLevel`) and `World::step` (`UpdateGame`
   plus the frame's time-limit check). The camera and lights are simulated
   here, because the original moves them per tick. `Session` carries the

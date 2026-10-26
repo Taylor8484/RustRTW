@@ -1056,7 +1056,13 @@ mod tests {
 
     #[test]
     fn push_cannons_count_down_to_fire() {
-        let mut w = world(&[100, 1901, 100], &[P, 0, 0]);
+        // In the middle row, so the shot burns out on row 0 rather than
+        // flying off the map.
+        let tiles = [100, 100, 100, 100, 1901, 100, 100, 100, 100];
+        let l = level(5, 3, &tiles, &[0, 0, 0, 0, 0, 0, P, 0, 0]);
+        let mut w =
+            World::start(&l, Ruleset::rtwp(), Options::default(), Session::default()).unwrap();
+        run(&mut w, 160, Input::default());
         let b = &w.blocks[0];
         assert_eq!((b.kind, b.cannon_y, b.cannon_speed), (101, -1, 2));
         // Created with 3 * 120 ticks to go; 160 have passed.

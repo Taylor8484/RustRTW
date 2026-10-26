@@ -138,7 +138,7 @@ Function RecTickEnd()
 
 	s$="R"
 	For i=0 To 3
-		s$=s$+" "+ElectroTimer(i)
+		s$=s$+" "+ElectroTimer(i)*ElectroExists(i)	; stale from earlier levels when unused
 	Next
 	s$=s$+" "+NofSpikes
 	For i=0 To NofSpikes-1

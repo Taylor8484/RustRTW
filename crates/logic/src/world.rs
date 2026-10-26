@@ -3,8 +3,7 @@
 //!
 //! [`World::step`] runs one tick in `UpdateGame`'s order. The players are
 //! in [`crate::player`] and the signs in [`crate::sign`]; the other object
-//! families have their own modules; comments in `step` mark where the ones
-//! still to port (step 2.2f) slot in.
+//! families have their own modules.
 //!
 //! The camera and lights live here too: the original moves them by fixed
 //! amounts each tick and draws random numbers for the lightning, so the
@@ -14,9 +13,11 @@
 use wonderland_formats::Level;
 
 use crate::block::{Block, Boxer, Transporter};
+use crate::hazard::{Cannon, Electro, Fireball, MAX_FIREBALLS, Spike};
 use crate::item::Item;
 use crate::monster::{Monster, Warper};
 use crate::player::Player;
+use crate::scenery::{Fish, Pillar};
 use crate::setup::{LoadOptions, MonsterDir, Setup, Spawn};
 use crate::sign::{LEVEL_NAME, ShownSign};
 use crate::switch::Button;
@@ -287,6 +288,19 @@ pub struct World {
     /// `NofTotalBonusCoins`.
     pub total_bonus_coins: i32,
     pub buttons: Vec<Button>,
+    /// The four electro tile types.
+    pub electros: [Electro; 5],
+    pub spikes: Vec<Spike>,
+    pub cannons: Vec<Cannon>,
+    /// The `Fireball*` slots, `MaxFireballs + 1` of them; the first
+    /// `fireball_count` are in play ([`World::fireballs`]).
+    pub(crate) fireball_slots: Vec<Fireball>,
+    /// `NofFireballs`.
+    pub(crate) fireball_count: usize,
+    pub fish: Vec<Fish>,
+    pub pillars: Vec<Pillar>,
+    /// `HouseStyle`: the house texture, 1–4.
+    pub house_style: i32,
     /// `LaserGateActive`: gates of each colour are closed.
     pub laser_gate_active: [bool; 10],
     /// The score the level-complete sign compares against, from the
@@ -382,6 +396,14 @@ impl World {
             total_bonus_coins: 0,
             laser_gate_active: [false; 10],
             buttons: Vec::new(),
+            electros: [Electro::default(); 5],
+            spikes: Vec::new(),
+            cannons: Vec::new(),
+            fireball_slots: vec![Fireball::default(); MAX_FIREBALLS + 1],
+            fireball_count: 0,
+            fish: Vec::new(),
+            pillars: Vec::new(),
+            house_style: 1,
             record: None,
             conveyor_active: [true; 2],
             both_completed: 0,
@@ -419,6 +441,7 @@ impl World {
             session,
         };
         world.create_objects();
+        world.create_electros();
         world.total_coins = world.coins;
         world.total_bonus_coins = world.bonus_coins;
         world.focus_first_player()?;
@@ -548,8 +571,17 @@ impl World {
                 Spawn::Item { x, y, kind } => self.create_item(x, y, kind),
                 Spawn::LaserGate { col, .. } => self.create_laser_gate(col),
                 Spawn::Button { x, y, kind } => self.create_button(x, y, kind),
-                // 2.2f creates the other objects.
-                _ => {}
+                Spawn::Spike { x, y, speed } => self.create_spike(x, y, speed),
+                Spawn::Cannon {
+                    x,
+                    y,
+                    speed,
+                    dx,
+                    dy,
+                } => self.create_cannon(x, y, speed, dx, dy),
+                Spawn::Fireball { x, y, dx, dy } => self.create_fireball(x, y, dx, dy),
+                Spawn::Fish { x, y } => self.create_fish(x, y),
+                Spawn::Pillar { x, y, kind } => self.create_pillar(x, y, kind),
             }
         }
     }
@@ -629,18 +661,20 @@ impl World {
 
         self.convey_players();
         self.convey_boxes();
-        // 2.2f: ControlFireballs.
+        self.control_fireballs();
         for k in 1..self.players.len() {
             self.control_player(k);
         }
         self.control_boxes();
-        // 2.2f, in this order: ControlElectroTiles, ControlCannons,
-        // ControlSpikes.
+        self.control_electro_tiles();
+        self.control_cannons();
+        self.control_spikes();
         self.control_timer_buttons();
         self.control_monsters();
         self.control_items();
-        // 2.2f: ControlFish, ControlParticles (renderer), ControlFireballs
-        // again.
+        self.control_fish();
+        // ControlParticles: renderer.
+        self.control_fireballs();
         self.control_boxers();
         self.control_warpers();
 
@@ -654,7 +688,7 @@ impl World {
         self.end_box_moves();
         self.end_monster_moves();
         self.clean_up_boxes();
-        // 2.2f: CleanUpFireballs.
+        self.clean_up_fireballs();
         self.clean_up_monsters();
         self.clean_up_items();
 
