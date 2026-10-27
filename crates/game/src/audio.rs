@@ -7,6 +7,8 @@
 //! speed relative to the file's own rate. Voices in `CustomVoices\` replace
 //! the shipped ones when present, as in the original.
 //!
+//! The menus queue their sounds in [`MenuSounds`], played in any phase.
+//!
 //! Music (`.it` modules) is not played yet.
 
 use std::collections::HashMap;
@@ -17,7 +19,9 @@ use bevy::prelude::*;
 use wonderland_logic::world::LoseSound;
 use wonderland_logic::{Event, Sound};
 
+use crate::flow::Phase;
 use crate::level::GameData;
+use crate::menu::MenuSound;
 use crate::sim::{Sim, SimStep};
 
 /// The file for `sound`, and the pitch it plays at (`None`: as recorded).
@@ -174,12 +178,90 @@ struct SoundBank {
     loaded: HashMap<String, Option<(Handle<AudioSource>, u32)>>,
 }
 
+impl SoundBank {
+    /// The sound in `path` and its sample rate, loaded once.
+    fn get(
+        &mut self,
+        path: &str,
+        data: &GameData,
+        sources: &mut Assets<AudioSource>,
+    ) -> Option<(Handle<AudioSource>, u32)> {
+        self.loaded
+            .entry(path.to_owned())
+            .or_insert_with(|| match data.assets.read(path) {
+                Ok(bytes) => {
+                    let rate = wav_rate(&bytes).unwrap_or(22050);
+                    let source = AudioSource {
+                        bytes: Arc::from(bytes.as_ref()),
+                    };
+                    Some((sources.add(source), rate))
+                }
+                Err(err) => {
+                    warn!("sound {path}: {err}");
+                    None
+                }
+            })
+            .clone()
+    }
+}
+
+/// Sounds from outside the level to play this frame: the menus' and the
+/// exit sound.
+#[derive(Resource, Default)]
+pub struct MenuSounds(pub Vec<MenuSound>);
+
+/// The file for a menu sound and whether it plays through `PlayMySound`
+/// (at the sound level, and not at all with sound off) or `PlaySound`
+/// (at full volume).
+pub fn menu_sound_file(sound: MenuSound) -> (&'static str, bool) {
+    match sound {
+        MenuSound::Move => ("sound\\menumove.wav", true),
+        MenuSound::SecretSong => ("newsounds\\song1c.wav", false),
+        MenuSound::Exit(n) => match n {
+            3 => ("newsounds\\exit3.wav", true),
+            4 => ("newsounds\\exit4.wav", true),
+            5 => ("newsounds\\exit5.wav", true),
+            6 => ("newsounds\\exit6.wav", true),
+            _ => ("newsounds\\exit8.wav", true),
+        },
+    }
+}
+
 pub struct AudioPlugin;
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SoundBank>()
-            .add_systems(Update, play_sounds.after(SimStep));
+            .init_resource::<MenuSounds>()
+            .add_systems(
+                Update,
+                (
+                    play_sounds.after(SimStep).run_if(in_state(Phase::Game)),
+                    play_menu_sounds,
+                ),
+            );
+    }
+}
+
+fn play_menu_sounds(
+    mut commands: Commands,
+    data: Res<GameData>,
+    mut queue: ResMut<MenuSounds>,
+    mut bank: ResMut<SoundBank>,
+    mut sources: ResMut<Assets<AudioSource>>,
+) {
+    for sound in std::mem::take(&mut queue.0) {
+        let (path, scaled) = menu_sound_file(sound);
+        let volume = if scaled { data.sound_volume } else { 1.0 };
+        if volume <= 0.0 {
+            continue;
+        }
+        if let Some((handle, _)) = bank.get(path, &data, &mut sources) {
+            commands.spawn((
+                AudioPlayer::new(handle),
+                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)),
+            ));
+        }
     }
 }
 
@@ -203,23 +285,7 @@ fn play_sounds(
         if sound == Sound::Single(8) && sim.world.chomp_pitch > 0 {
             pitch = Some(sim.world.chomp_pitch);
         }
-        let entry =
-            bank.loaded
-                .entry(path.clone())
-                .or_insert_with(|| match data.assets.read(&path) {
-                    Ok(bytes) => {
-                        let rate = wav_rate(&bytes).unwrap_or(22050);
-                        let source = AudioSource {
-                            bytes: Arc::from(bytes.as_ref()),
-                        };
-                        Some((sources.add(source), rate))
-                    }
-                    Err(err) => {
-                        warn!("sound {path}: {err}");
-                        None
-                    }
-                });
-        let Some((handle, rate)) = entry.clone() else {
+        let Some((handle, rate)) = bank.get(&path, &data, &mut sources) else {
             continue;
         };
         let speed = pitch.map_or(1.0, |p| p as f32 / rate as f32);

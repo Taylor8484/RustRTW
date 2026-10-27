@@ -18,6 +18,7 @@ use wonderland_logic::{Effect, Event};
 
 use crate::camera::GameCamera;
 use crate::coords::vec;
+use crate::flow::Phase;
 use crate::level::GameData;
 use crate::scene::{LevelEntity, TextureCache};
 use crate::sim::{Sim, SimStep};
@@ -255,13 +256,16 @@ impl Plugin for ParticlesPlugin {
         app.insert_resource(Dice(0x9E37_79B9_7F4A_7C15))
             .add_systems(
                 Update,
-                (spawn_particles, move_particles).chain().after(SimStep),
+                (spawn_particles, move_particles)
+                    .chain()
+                    .after(SimStep)
+                    .run_if(in_state(Phase::Game)),
             );
     }
 }
 
 /// The texture and frame transform for particle texture `tex`.
-fn frame(tex: i32) -> (TextureRef, Affine2) {
+pub fn frame(tex: i32) -> (TextureRef, Affine2) {
     let (path, flags, per_row, f) = if tex < 100 {
         ("res21.dat", 2, 16.0, tex)
     } else {

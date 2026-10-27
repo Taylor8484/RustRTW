@@ -144,9 +144,13 @@ pinned and upgraded deliberately.
   (1.97.1) is the workspace's. Building `bevy_audio` on Linux needs the
   ALSA headers (`libasound2-dev`). Textures are decoded with `image`
   (BMP/JPEG), not Bevy's loaders.
-- **Run:** `wonderland [--assets <dir>] [--level <name>] [--backend
-  dx12|vulkan|gl]` starts an RTWP level (`intro` by default) from
-  `<dir>/RTWP`, where `<dir>` defaults to `$WL_ASSETS`, else `assets`.
+- **Run:** `wonderland [--assets <dir>] [--level <name>] [--windowed]
+  [--backend dx12|vulkan|gl]` starts RTWP at its title screen, or with
+  `--level` straight in that level, from `<dir>/RTWP`, where `<dir>`
+  defaults to `$WL_ASSETS`, else `assets`. The window's size and full
+  screen setting come from `options.cfg` (`MyGfxMode`, `MyWindowed`);
+  full screen is borderless at the desktop's resolution, and
+  `--windowed` keeps a window.
 - **Renderer:** DX12 on Windows with Vulkan as the fallback, and Vulkan on
   Linux with OpenGL as the fallback. Both are passed to wgpu, which takes
   the first that works. wgpu's OpenGL on Windows needs ANGLE, so it is
@@ -184,13 +188,33 @@ pinned and upgraded deliberately.
   `texture`), lights it and scrolls the water and conveyor textures;
   `CameraPlugin` follows `World::camera`; `ObjectsPlugin`,
   `ParticlesPlugin` and `AudioPlugin` draw and play the rest; `HudPlugin`
-  draws the coin/bonus/time line and the signs in the game's bitmap font
-  (UI image nodes on `DisplayText`'s 50-column grid); `FlowPlugin`
-  restarts a lost level, moves on from a won one through a `Playlist`
-  (pack order until the campaign) and quits on Esc.
+  draws `hud::Screen` in the game's bitmap font (UI image nodes on
+  `DisplayText`'s 50-column grid): the coin/bonus/time line and the signs
+  in play, the menu text, selector bar and logos in the menus;
+  `FlowPlugin` holds the `Phase` (`GamePhase`: menus or play), restarts a
+  lost level, moves on from a won one through a `Playlist` (pack order
+  until the campaign) and goes back to the main menu on Esc;
+  `MenuScenePlugin` runs the menus and draws their background. The level
+  plugins run only in `Phase::Game`.
+- **Menus:** `menu` is the menus' state and logic with no Bevy types
+  (`StartMenu`, `EndMenu`, each `MenuLoopN` as one frame, the text by
+  tag, `MenuBkgUpdate`), so it is unit tested; it returns `Action`s
+  (sounds, start a game, save the options, quit) for `menu_scene` to
+  carry out. Keys are read once per frame as held keys, with
+  `CursorKeyPressed` turning a held key into one press, as in the
+  original. The background is `MenuBkgStyle` 1: a cloud-textured
+  cylinder, two water planes, mountains from the `res9.dat` heightmap
+  (a full grid instead of Blitz's LOD terrain), a sun and 50 sparkles,
+  lit per vertex like the objects while the light comes up from black.
+  `MenuSetup` turns on linear fog (90–128) and nothing turns it off, so
+  the camera keeps it in play too, in the colour the menus left.
+  Options are written back to `options.cfg` in the game folder.
 - **Checking without a display:** `WL_SCREENSHOT=out.png[,frames]` saves
   a frame and quits; with `WL_HEADLESS=1` there is no window and the
-  camera draws into a 1024x768 image. WSLg could not present a window
+  camera draws into a 1024x768 image. `WL_MENU=<ticks>[,<menu>]` starts
+  the menus with `MenuTimer` at `ticks` (and in menu `menu`). On the
+  software renderer new materials take over 100 frames to compile, so
+  use 150 frames or more. WSLg could not present a window
   here (Wayland dropped the connection, GL had no present mode).
 
 ## Porting notes (Blitz3D semantics)

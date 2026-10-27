@@ -19,8 +19,15 @@
 //!   weather.
 //! - [`shot::ShotPlugin`]: `WL_SCREENSHOT` saves a frame and quits.
 //!
-//! - [`hud::HudPlugin`]: the coin and time display and the signs.
-//! - [`flow::FlowPlugin`]: restarts a lost level, moves on from a won one.
+//! - [`hud::HudPlugin`]: draws [`hud::Screen`]: the coin and time display
+//!   and the signs, or the menu text.
+//! - [`flow::FlowPlugin`]: the [`flow::Phase`] (menus or play), restarts a
+//!   lost level, moves on from a won one.
+//! - [`menu_scene::MenuScenePlugin`]: runs [`menu`] and draws its 3D
+//!   background.
+//!
+//! The level plugins run in [`flow::Phase::Game`] only, and need the
+//! [`sim::Sim`] and [`level::LevelData`] resources [`flow::begin`] makes.
 
 pub mod audio;
 pub mod camera;
@@ -30,6 +37,8 @@ pub mod hud;
 pub mod level;
 pub mod level_mesh;
 pub mod lighting;
+pub mod menu;
+pub mod menu_scene;
 pub mod model;
 pub mod objects;
 pub mod particles;
@@ -55,6 +64,7 @@ impl Plugin for GamePlugins {
             particles::ParticlesPlugin,
             hud::HudPlugin,
             flow::FlowPlugin,
+            menu_scene::MenuScenePlugin,
             shot::ShotPlugin,
         ));
     }

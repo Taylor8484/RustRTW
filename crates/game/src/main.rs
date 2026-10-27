@@ -1,8 +1,12 @@
-//! `wonderland [--assets <dir>] [--level <name>] [--backend <name>]`
+//! `wonderland [--assets <dir>] [--level <name>] [--windowed]
+//! [--backend <name>]`
 //!
-//! Starts a Return to Wonderland Platinum level straight away and goes on
-//! through the pack's levels as each is won. Esc quits. The game data is
-//! read from `<dir>/RTWP` (default: `$WL_ASSETS`, else `assets`).
+//! Starts Return to Wonderland Platinum at its title screen, or with
+//! `--level` straight in that level, going on through the pack's levels
+//! as each is won. The game data is read from `<dir>/RTWP` (default:
+//! `$WL_ASSETS`, else `assets`). The window takes its size and full
+//! screen setting from `options.cfg` as the original does; `--windowed`
+//! keeps it in a window.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,27 +18,30 @@ use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
 use bevy::window::ExitCondition;
+use bevy::window::WindowMode;
 use bevy::winit::WinitPlugin;
 use wonderland_game::GamePlugins;
-use wonderland_game::flow::Playlist;
+use wonderland_game::flow::{Phase, begin};
 use wonderland_game::level::{GameData, default_assets_dir};
+use wonderland_game::menu::GFX_MODES;
 use wonderland_game::shot::headless;
-use wonderland_game::sim::Sim;
 use wonderland_logic::Session;
 
 struct Args {
     assets: PathBuf,
     level: Option<String>,
+    windowed: bool,
     backends: Option<Backends>,
 }
 
-const USAGE: &str =
-    "usage: wonderland [--assets <dir>] [--level <name>] [--backend dx12|vulkan|gl]";
+const USAGE: &str = "usage: wonderland [--assets <dir>] [--level <name>] [--windowed] \
+                     [--backend dx12|vulkan|gl]";
 
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         assets: default_assets_dir(),
         level: None,
+        windowed: false,
         backends: None,
     };
     let mut it = std::env::args().skip(1);
@@ -46,6 +53,7 @@ fn parse_args() -> Result<Args, String> {
         match a.as_str() {
             "--assets" => args.assets = PathBuf::from(value()?).join("RTWP"),
             "--level" => args.level = Some(value()?),
+            "--windowed" => args.windowed = true,
             "--backend" => {
                 let v = value()?;
                 args.backends = Some(Backends::from_comma_list(&v));
@@ -83,40 +91,36 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let name = match &args.level {
-        Some(n) => data.find_level(n),
-        None => data
-            .find_level("intro")
-            .or_else(|| data.level_names().into_iter().next()),
-    };
-    let Some(name) = name else {
-        eprintln!(
-            "no such level: {}",
-            args.level.as_deref().unwrap_or("(none in the pack)")
-        );
-        return ExitCode::FAILURE;
-    };
-    // Until the campaign (step 4): the pack's levels in order from here.
-    let names = data.level_names();
-    let playlist = Playlist {
-        index: names.iter().position(|n| *n == name).unwrap_or(0),
-        names,
-    };
-    let level = match data.load_level(&name) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let sim = match Sim::start(&data, &level, Session::default(), 0) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
+    // `--level`: straight into play, skipping the menus.
+    let start = match &args.level {
+        None => None,
+        Some(n) => {
+            let Some(name) = data.find_level(n) else {
+                eprintln!("no such level: {n}");
+                return ExitCode::FAILURE;
+            };
+            match begin(&data, &name, Session::default(), 0) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            }
         }
     };
 
+    // `Graphics3D` with `MyGfxMode` and `MyWindowed`; full screen keeps
+    // the desktop's mode rather than switching.
+    let (width, height) = usize::try_from(data.config.gfx_mode)
+        .ok()
+        .and_then(|i| GFX_MODES.get(i))
+        .copied()
+        .unwrap_or(GFX_MODES[0]);
+    let mode = if data.config.windowed == 0 && !args.windowed {
+        WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+    } else {
+        WindowMode::Windowed
+    };
     let render = RenderPlugin {
         render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
             backends: Some(backends(args.backends)),
@@ -142,8 +146,9 @@ fn main() -> ExitCode {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: "Wonderland".into(),
-                        resolution: (1024, 768).into(),
+                        title: "Return To Wonderland".into(),
+                        resolution: (width, height).into(),
+                        mode,
                         ..default()
                     }),
                     ..default()
@@ -151,11 +156,12 @@ fn main() -> ExitCode {
                 .set(render),
         );
     }
-    app.insert_resource(data)
-        .insert_resource(level)
-        .insert_resource(sim)
-        .insert_resource(playlist)
-        .add_plugins(GamePlugins)
-        .run();
+    if let Some((level, sim, playlist)) = start {
+        app.insert_resource(level)
+            .insert_resource(sim)
+            .insert_resource(playlist)
+            .insert_state(Phase::Game);
+    }
+    app.insert_resource(data).add_plugins(GamePlugins).run();
     ExitCode::SUCCESS
 }

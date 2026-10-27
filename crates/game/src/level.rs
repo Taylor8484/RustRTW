@@ -18,6 +18,8 @@ pub struct GameData {
     /// `OptionsSoundLevel` and `OptionsMusicLevel`, 0–1.
     pub sound_volume: f32,
     pub music_volume: f32,
+    /// `options.cfg` as loaded and as the options menu changes it.
+    pub config: ConfigOptions,
 }
 
 impl GameData {
@@ -25,30 +27,45 @@ impl GameData {
     /// there is one.
     pub fn open(dir: &Path) -> Result<Self, String> {
         let assets = GameAssets::open(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        // `LoadOptions`: the defaults when there is no file.
         let config = assets
             .read("options.cfg")
             .ok()
-            .and_then(|d| ConfigOptions::parse(Game::Rtwp, &d).ok());
-        let mut options = Options::default();
-        let mut teleport_option = 0;
-        let (mut sound_volume, mut music_volume) = (1.0, 1.0);
-        if let Some(c) = config {
-            sound_volume = c.sound_level as f32 / 100.0;
-            music_volume = c.music_level as f32 / 100.0;
-            options.detail_level = c.detail_level.clamp(1, 5);
-            options.no_time_limit = c.no_time_limit != 0;
-            options.language = c.language;
-            options.sound = c.sound_level > 0;
-            teleport_option = c.teleport;
-        }
-        Ok(Self {
+            .and_then(|d| ConfigOptions::parse(Game::Rtwp, &d).ok())
+            .unwrap_or_else(|| ConfigOptions::defaults(Game::Rtwp));
+        let mut data = Self {
             assets,
             ruleset: Ruleset::rtwp(),
-            options,
-            teleport_option,
-            sound_volume,
-            music_volume,
-        })
+            options: Options::default(),
+            teleport_option: 0,
+            sound_volume: 1.0,
+            music_volume: 1.0,
+            config,
+        };
+        data.apply_config();
+        Ok(data)
+    }
+
+    /// Takes the settings from [`GameData::config`].
+    pub fn apply_config(&mut self) {
+        let c = &self.config;
+        self.sound_volume = c.sound_level as f32 / 100.0;
+        self.music_volume = c.music_level as f32 / 100.0;
+        self.options.detail_level = c.detail_level.clamp(1, 5);
+        self.options.no_time_limit = c.no_time_limit != 0;
+        self.options.language = c.language;
+        self.options.sound = c.sound_level > 0;
+        self.teleport_option = c.teleport;
+    }
+
+    /// `SaveOptions`: writes all twelve values to `options.cfg` in the
+    /// game folder.
+    pub fn save_config(&mut self) -> Result<(), String> {
+        self.config.present = ConfigOptions::int_count(Game::Rtwp);
+        self.config.trailing.clear();
+        let path = self.assets.dir().join("options.cfg");
+        std::fs::write(&path, self.config.to_bytes())
+            .map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// The level files in the pack, as the pack names them.

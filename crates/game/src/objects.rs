@@ -30,6 +30,7 @@ use wonderland_logic::world::Lights;
 use wonderland_logic::{Spawn, World};
 
 use crate::coords::{triangle, vec};
+use crate::flow::Phase;
 use crate::level::{GameData, LevelData};
 use crate::lighting::light_direction;
 use crate::model::{Geometry, Model, ModelId, blitz_quat, load, player_skins};
@@ -612,7 +613,10 @@ impl Plugin for ObjectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Pools>()
             .add_systems(Startup, load_models)
-            .add_systems(Update, sync_objects.after(SimStep));
+            .add_systems(
+                Update,
+                sync_objects.after(SimStep).run_if(in_state(Phase::Game)),
+            );
     }
 }
 
@@ -622,7 +626,7 @@ fn load_models(mut commands: Commands, data: Res<GameData>) {
 
 /// The light factor for a Bevy-space normal, as an sRGB colour converted
 /// to the linear values vertex colours hold.
-fn vertex_colour(lights: &Lights, n: Vec3) -> [f32; 4] {
+pub fn vertex_colour(lights: &Lights, n: Vec3) -> [f32; 4] {
     let d = vec(light_direction());
     let lambert = (-n.dot(d)).max(0.0);
     let f = |c: usize| {

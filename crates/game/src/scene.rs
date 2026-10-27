@@ -13,6 +13,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use crate::coords::{triangle, vec};
+use crate::flow::Phase;
 use crate::level::{GameData, LevelData};
 use crate::level_mesh::{Quad, Tex, construct_background, construct_level};
 use crate::lighting;
@@ -98,10 +99,11 @@ impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TextureCache>()
             .insert_resource(ClearColor(Color::BLACK))
-            .add_systems(Startup, spawn_level)
             .add_systems(
                 Update,
-                (update_lit_faces, animate_uvs, drift_planes).after(SimStep),
+                (update_lit_faces, animate_uvs, drift_planes)
+                    .after(SimStep)
+                    .run_if(in_state(Phase::Game)),
             );
     }
 }

@@ -5,6 +5,7 @@
 use bevy::prelude::*;
 use wonderland_logic::{Clock, Completion, Event, Input, Session, World};
 
+use crate::flow::Phase;
 use crate::level::{GameData, LevelData};
 
 /// The level in play.
@@ -98,7 +99,7 @@ pub struct SimPlugin;
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TickAnim>()
-            .add_systems(Update, step.in_set(SimStep));
+            .add_systems(Update, step.in_set(SimStep).run_if(in_state(Phase::Game)));
     }
 }
 

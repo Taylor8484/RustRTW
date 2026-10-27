@@ -441,10 +441,15 @@ fn from_mesh(m: &mesh::Mesh) -> Vec<Geometry> {
         .collect()
 }
 
-/// `CreateSphere(8)`: 16 segments around, 8 down, u around, v from the
-/// top. Normals point out.
+/// `CreateSphere(8)`.
 pub fn sphere() -> Geometry {
-    let (around, down) = (16u32, 8u32);
+    sphere_segments(8)
+}
+
+/// `CreateSphere(segments)`: twice `segments` around, `segments` down, u
+/// around, v from the top. Normals point out.
+pub fn sphere_segments(segments: u32) -> Geometry {
+    let (around, down) = (segments * 2, segments);
     let mut g = Geometry::default();
     for j in 0..=down {
         let theta = std::f32::consts::PI * j as f32 / down as f32;
@@ -501,7 +506,11 @@ pub fn cube() -> Geometry {
 
 /// `CreateCylinder(6, solid)`.
 pub fn cylinder(solid: bool) -> Geometry {
-    let segs = 6u32;
+    cylinder_segments(6, solid)
+}
+
+/// `CreateCylinder(segs, solid)`.
+pub fn cylinder_segments(segs: u32, solid: bool) -> Geometry {
     let mut g = Geometry::default();
     for i in 0..=segs {
         let phi = std::f32::consts::TAU * i as f32 / segs as f32;
@@ -553,6 +562,16 @@ pub fn flat_square() -> Geometry {
         normals: vec![[0.0, 1.0, 0.0]; 4],
         uvs: vec![[0.01, -0.99], [0.99, -0.99], [0.99, 0.01], [0.01, 0.01]],
         triangles: vec![[0, 1, 2], [0, 2, 3]],
+    }
+}
+
+/// `FlipMesh`: turns every triangle and normal round.
+pub fn flip(g: &mut Geometry) {
+    for t in &mut g.triangles {
+        t.swap(1, 2);
+    }
+    for n in &mut g.normals {
+        *n = n.map(|c| -c);
     }
 }
 

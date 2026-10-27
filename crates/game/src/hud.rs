@@ -6,6 +6,9 @@
 //! top of a 4:3 screen. The font is five 16-glyph strips (`res15.dat` to
 //! `res20.dat`, 16x32 glyphs from ASCII 32), with alpha from brightness
 //! (texture flag 2). Here each letter is a UI image node.
+//!
+//! The game and the menus both fill [`Screen`]: the menus add their
+//! selector bar and logos as [`ScreenImage`]s, drawn under the letters.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -13,6 +16,7 @@ use wonderland_logic::World;
 use wonderland_logic::sign::LEVEL_NAME;
 
 use crate::camera::GameCamera;
+use crate::flow::Phase;
 use crate::level::GameData;
 use crate::scene::TextureCache;
 use crate::shot::{HEADLESS_SIZE, headless};
@@ -141,6 +145,35 @@ pub fn all_letters(w: &World) -> Vec<Letter> {
     out
 }
 
+/// A picture in front of the camera, in letter-grid units: columns
+/// across, rows down from row 0.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScreenImage {
+    pub texture: TextureRef,
+    /// Left, top, right and bottom.
+    pub rect: [f32; 4],
+    /// The part of the texture shown, 0–1 (left, top, right, bottom).
+    pub uv: [f32; 4],
+    /// sRGB colour and alpha it is multiplied by.
+    pub colour: [f32; 4],
+}
+
+/// Where a rectangle in front of a zoom-2 camera lands on the letter grid:
+/// centre `(x, y)` and half-size `(hx, hy)` at depth `z`, in camera space.
+/// Letters sit at depth 1, where the grid is 1 unit across.
+pub fn camera_rect(x: f32, y: f32, z: f32, hx: f32, hy: f32) -> [f32; 4] {
+    let col = |x: f32| (x / z + 0.5) / 0.02;
+    let row = |y: f32| (0.375 - y / z) / 0.04;
+    [col(x - hx), row(y + hy), col(x + hx), row(y - hy)]
+}
+
+/// What is drawn over the 3D view this frame.
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct Screen {
+    pub images: Vec<ScreenImage>,
+    pub letters: Vec<Letter>,
+}
+
 /// The root UI node the letters hang under.
 #[derive(Component)]
 struct HudRoot;
@@ -148,22 +181,41 @@ struct HudRoot;
 #[derive(Component)]
 struct Glyph;
 
-/// What the letters were last drawn from.
+/// What the screen was last drawn from.
 #[derive(Resource, Default)]
 struct Drawn {
-    letters: Vec<Letter>,
+    screen: Screen,
     size: Vec2,
     fonts: Vec<Handle<Image>>,
 }
+
+/// Runs after the game or the menus have filled [`Screen`].
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScreenFilled;
 
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Drawn>()
+            .init_resource::<Screen>()
             .add_systems(Startup, spawn_root)
-            .add_systems(Update, draw_letters.after(SimStep));
+            .add_systems(
+                Update,
+                (
+                    game_screen
+                        .after(SimStep)
+                        .before(ScreenFilled)
+                        .run_if(in_state(Phase::Game)),
+                    draw_screen.after(ScreenFilled),
+                ),
+            );
     }
+}
+
+fn game_screen(sim: Res<Sim>, mut screen: ResMut<Screen>) {
+    screen.images.clear();
+    screen.letters = all_letters(&sim.world);
 }
 
 fn spawn_root(mut commands: Commands) {
@@ -179,9 +231,9 @@ fn spawn_root(mut commands: Commands) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_letters(
+fn draw_screen(
     mut commands: Commands,
-    sim: Res<Sim>,
+    screen: Res<Screen>,
     data: Res<GameData>,
     mut drawn: ResMut<Drawn>,
     mut cache: ResMut<TextureCache>,
@@ -196,8 +248,7 @@ fn draw_letters(
         Err(_) if headless() => Vec2::new(HEADLESS_SIZE.0 as f32, HEADLESS_SIZE.1 as f32),
         Err(_) => return,
     };
-    let letters = all_letters(&sim.world);
-    if letters == drawn.letters && size == drawn.size {
+    if *screen == drawn.screen && size == drawn.size {
         return;
     }
     let Ok((root, targeted)) = root.single() else {
@@ -227,8 +278,39 @@ fn draw_letters(
     // where the top of a 4:3 picture would be.
     let cell = size.x / 50.0;
     let top = size.y / 2.0 - 0.375 * size.x;
+    let pictures: Vec<(Handle<Image>, Option<Vec2>, &ScreenImage)> = screen
+        .images
+        .iter()
+        .map(|i| {
+            let handle = cache.get(&i.texture, &data, &mut images).0;
+            let px = images.get(&handle).map(|im| im.size_f32());
+            (handle, px, i)
+        })
+        .collect();
     commands.entity(root).with_children(|ui| {
-        for l in &letters {
+        for (handle, px, i) in pictures {
+            let [l, t, r, b] = i.rect;
+            let mut image = ImageNode::new(handle).with_mode(NodeImageMode::Stretch);
+            if let Some(px) = px {
+                let [u0, v0, u1, v1] = i.uv;
+                image.rect = Some(Rect::new(u0 * px.x, v0 * px.y, u1 * px.x, v1 * px.y));
+            }
+            let [cr, cg, cb, ca] = i.colour;
+            image.color = Color::srgba(cr, cg, cb, ca);
+            ui.spawn((
+                image,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(l * cell),
+                    top: Val::Px(top + t * cell * 2.0),
+                    width: Val::Px((r - l) * cell),
+                    height: Val::Px((b - t) * cell * 2.0),
+                    ..default()
+                },
+                Glyph,
+            ));
+        }
+        for l in &screen.letters {
             if l.ascii <= b' ' {
                 continue;
             }
@@ -254,7 +336,7 @@ fn draw_letters(
             ));
         }
     });
-    drawn.letters = letters;
+    drawn.screen = screen.clone();
     drawn.size = size;
 }
 
