@@ -203,7 +203,13 @@ impl Tick {
                 let b = self.line('B');
                 let mut v = vec![b.first().copied().unwrap_or(0)];
                 for c in b.get(1..).unwrap_or_default().chunks(BOX_FIELDS) {
-                    v.extend_from_slice(&c[..BOX_FIELDS - BOX_ENTITY]);
+                    let mut f = c[..BOX_FIELDS - BOX_ENTITY].to_vec();
+                    // `CreateBox` leaves a stale timer in the slot (as for
+                    // monsters), read only while moving; 0 at rest.
+                    if f.get(3) == Some(&0) && f.len() > 4 {
+                        f[4] = 0;
+                    }
+                    v.extend(f);
                 }
                 v
             }
@@ -643,7 +649,7 @@ impl Family {
                         bl.x,
                         bl.y,
                         b(bl.moving),
-                        bl.moving_timer,
+                        if bl.moving { bl.moving_timer } else { 0 },
                         b(bl.dead),
                     ]);
                 }
