@@ -1,7 +1,8 @@
 //! Per-game parameters. The games share one engine, so where they differ the
 //! simulation reads a field here instead of branching on the game.
 
-/// The rules one game runs by. Steps 5 and 6 add the TOW and WSW values.
+/// The rules one game runs by. TOW levels run under `rtwp()`; step 5 adds
+/// flags only where TOW content needs them, and step 7 adds WSW's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ruleset {
     /// Ticks for a regular one-tile move (`Const BaseSpeed`).

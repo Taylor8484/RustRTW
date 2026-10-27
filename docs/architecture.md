@@ -2,10 +2,10 @@
 
 ## Goal
 
-One executable that plays all three Wonderland Classic games. On launch the
-player picks which game to play (The Original Wonderland, Return to Wonderland
-Platinum, or Wonderland Secret Worlds); the same engine then runs that game's
-content and rules.
+One executable that plays the Wonderland Classic games on one engine. v1 is
+the Return to Wonderland Platinum engine playing both RTWP's and The Original
+Wonderland's levels, with TOW as content under RTWP's rules and no game
+selector. Wonderland Secret Worlds (world map, story screens) follows v1.
 
 The original Blitz3D sources (`TOW/`, `RTWP/`, `WSW/`) stay in the repo as the
 reference implementation until the port reaches parity.
@@ -38,7 +38,7 @@ crates/
   formats/   pack files, levels v1–v6, saves, options       (no engine deps)
   logic/     deterministic simulation, per-game Ruleset      (no engine deps)
   campaign/  level order & progression per game
-  game/      Bevy app: launcher → game select → menus → play
+  game/      Bevy app: menus → play
   inspect/   wl-inspect CLI: dump packs (later levels, saves) for debugging
 data/
   tow.ron, rtwp.ron, wsw.ron   per-game definitions (worlds, level lists,
@@ -133,8 +133,9 @@ level packs, WSW's world map and story screens.
 
 ### game
 
-The Bevy front end. Detects which games are present under `assets/`, offers
-them in a launcher, then loads the selected game's definition and assets.
+The Bevy front end. v1 is one game: the RTWP engine, with TOW's levels
+offered as content inside its menus. Whether
+WSW later needs a launcher is decided when it is added.
 Renders and animates the `logic` state and plays audio. Bevy's version is
 pinned and upgraded deliberately.
 
