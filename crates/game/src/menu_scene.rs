@@ -26,6 +26,7 @@ use bevy::math::Affine2;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
+use wonderland_campaign::custom::{self, CustomLevels};
 use wonderland_campaign::profile::Players;
 use wonderland_campaign::worlds::{LEVELS, Worlds};
 use wonderland_formats::Game;
@@ -42,7 +43,7 @@ use crate::level::GameData;
 use crate::lighting::factor;
 use crate::menu::{Action, LevelCursor, Menu, MenuKeys, Selector, Square, exit_sound};
 use crate::model::{Geometry, cylinder_segments, flip, sphere_segments};
-use crate::music::{MusicRequest, world_track};
+use crate::music::{MusicRequest, extra_track, world_track};
 use crate::objects::vertex_colour;
 use crate::particles::frame;
 use crate::scene::TextureCache;
@@ -108,6 +109,7 @@ fn now_ms(time: &Time<Real>) -> i64 {
 fn setup_menu(mut commands: Commands, data: Res<GameData>, time: Res<Time<Real>>) {
     let mut menu = Menu::new();
     menu.players = Some(Players::new(data.assets.dir()));
+    menu.custom = Some(CustomLevels::new(data.assets.dir()));
     menu.level_titles = level_titles(&data, &menu.worlds);
     // `WL_PLAYER=<name>`: that player's progress, for screenshots.
     if let (Ok(name), Some(players)) = (std::env::var("WL_PLAYER"), &menu.players) {
@@ -177,6 +179,10 @@ fn read_keys(keys: &ButtonInput<KeyCode>) -> MenuKeys {
         zero: keys.pressed(KeyCode::Digit0),
         delete: keys.pressed(KeyCode::Delete),
         backspace: keys.pressed(KeyCode::Backspace),
+        page_up: keys.pressed(KeyCode::PageUp),
+        page_down: keys.pressed(KeyCode::PageDown),
+        f1: keys.pressed(KeyCode::F1),
+        f2: keys.pressed(KeyCode::F2),
     }
 }
 
@@ -324,11 +330,21 @@ fn menu_frame(
                     .as_ref()
                     .map_or_else(Session::default, |s| s.world.session.clone());
                 let record = record(&st.menu);
-                match (st.menu.worlds.level_path(level))
+                let custom = level == custom::LEVEL;
+                let path = if custom {
+                    st.menu.custom_path()
+                } else {
+                    st.menu.worlds.level_path(level)
+                };
+                match path
                     .ok_or_else(|| format!("no level {level}"))
                     .and_then(|path| begin(&data, &path, session, now, record))
                 {
                     Ok((level, sim)) => {
+                        // `ExtraLevelMusicTrack` changed: its music.
+                        if custom && let Some(t) = st.menu.custom_music(level.level.music_track) {
+                            music.0 = Some(Some(extra_track(t)));
+                        }
                         commands.insert_resource(level);
                         commands.insert_resource(sim);
                         commands.remove_resource::<Playlist>();
@@ -336,7 +352,11 @@ fn menu_frame(
                     }
                     Err(e) => {
                         error!("{e}");
-                        st.menu.start(crate::menu::LEVEL_SELECT);
+                        st.menu.start(if custom {
+                            crate::menu::CUSTOM_LEVELS
+                        } else {
+                            crate::menu::LEVEL_SELECT
+                        });
                     }
                 }
             }

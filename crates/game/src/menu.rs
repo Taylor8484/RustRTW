@@ -5,14 +5,13 @@
 //! draws it and carries out the [`Action`]s. Ported so far: the title (0),
 //! the main menu (1), player select (2), new player (3), the level
 //! selector (4), "Confirm Player Deletion?" (6), options (9), "Exit to
-//! Windows?" (10) and "Go Online?" (15).
+//! Windows?" (10), the level packs (13), the custom levels (14) and "Go
+//! Online?" (15).
 //!
-//! Stop-gaps until the menus they stand for are ported: choosing or
-//! creating a player should open the level pack menu (13, step 4d); for
-//! now it goes to the classic pack's level selector, as picking the
-//! classic levels there does. Esc on the level selector goes to the main
-//! menu, where 13 would come first. The endings (12 and 16, step 4f) go
-//! to the main menu.
+//! The level pack menu offers the tutorial, classic, deluxe and custom
+//! levels; the kids levels' line is commented out in the original, so
+//! their worlds are never reached. The endings (12 and 16, step 4f) go
+//! to the main menu until they are ported.
 //!
 //! Each `MenuLoopN` is one frame: it lays out the text (the letters get
 //! their alpha when first shown), runs the frame's ticks of
@@ -23,6 +22,7 @@
 use std::collections::VecDeque;
 use std::f32::consts::FRAC_1_SQRT_2;
 
+use wonderland_campaign::custom::{self, CustomLevels, FileEntry};
 use wonderland_campaign::profile::{Entry, MAX_PLAYERS, Players, Profile};
 use wonderland_campaign::worlds::{self, LEVELS, Worlds, title_lines, total_score};
 use wonderland_formats::config::Options as ConfigOptions;
@@ -37,9 +37,9 @@ pub const LEVEL_SELECT: i32 = 4;
 pub const DELETE_PLAYER: i32 = 6;
 pub const OPTIONS: i32 = 9;
 pub const EXIT: i32 = 10;
+pub const LEVEL_PACKS: i32 = 13;
+pub const CUSTOM_LEVELS: i32 = 14;
 pub const ONLINE: i32 = 15;
-/// The level pack menu, not ported yet (step 4d).
-const LEVEL_PACKS: i32 = 13;
 
 /// The keys the menus read, held this frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -62,6 +62,12 @@ pub struct MenuKeys {
     /// Delete (player select) and Backspace (new player).
     pub delete: bool,
     pub backspace: bool,
+    /// Page Up and Page Down (the custom levels).
+    pub page_up: bool,
+    pub page_down: bool,
+    /// F1 and F2: the custom levels sorted by name or not.
+    pub f1: bool,
+    pub f2: bool,
 }
 
 /// The sounds the menus play.
@@ -101,7 +107,8 @@ pub enum Action {
     /// `StartMenu` ran: restart the tick clock (`TweenTime`).
     Entered(i32),
     /// `StartLevel(CurrentLevel)`: leave the menus and play level
-    /// [`Menu::level`] of the world table.
+    /// [`Menu::level`] of the world table, or with `CurrentLevel=-999`
+    /// the custom level [`Menu::custom_path`].
     StartLevel(i32),
     /// `StartLevelMusic` for world `CurrentWorld`.
     LevelMusic(i32),
@@ -435,8 +442,9 @@ pub struct Menu {
     /// `LevelTimer`, which some menus count up and the main menu's hint
     /// blinks by.
     pub level_timer: i32,
-    /// `CursorKeyPressed`.
-    latched: bool,
+    /// `CursorKeyPressed`: a flag in most menus, a count of the frames
+    /// a cursor key is held in the custom levels.
+    cursor_key: i32,
     /// `SecretMusic`: frames since 1 was pressed on the options menu.
     secret_music: i32,
     /// `VersionNo1`: the major version, shown on the main menu, and set
@@ -458,8 +466,10 @@ pub struct Menu {
     pub millisecs: i32,
     /// The player chosen or created. Its `world` is `CurrentWorld`.
     pub profile: Option<Profile>,
-    /// `CurrentLevel`.
+    /// `CurrentLevel`: [`custom::LEVEL`] while a custom level is played.
     pub level: i32,
+    /// `CurrentLevelBackup`: `CurrentLevel` before a custom level.
+    level_backup: i32,
     /// `WhichWorldPack`.
     pub pack: i32,
     /// `LockWorlds` from the options: 1 opens every world's gate.
@@ -474,6 +484,22 @@ pub struct Menu {
     /// `CurrentWorldLevelName$`: three lines for each square. Kept from
     /// one world to the next, as lines the selector does not set are.
     level_names: Vec<[String; 4]>,
+    /// The `CustomLevels` folder; `None` lists nothing.
+    pub custom: Option<CustomLevels>,
+    /// `FileDir$` and the rest of the custom level list.
+    pub files: Vec<FileEntry>,
+    /// `FileDirPos`: the list's first line on screen.
+    pub file_pos: i32,
+    /// `CurrentExtraLevelDirectory$`, one folder name (upper case) each.
+    pub custom_dir: Vec<String>,
+    /// `CurrentFileDir`: the custom level played, by its place in the
+    /// list.
+    pub current_file: i32,
+    /// `CustomSortByName`.
+    sort_by_name: bool,
+    /// `ExtraLevelMusicTrack`: the music track of the last level loaded
+    /// that names one.
+    pub extra_music: i32,
     /// The level selector's squares and cursor, while it is shown.
     pub squares: Vec<LevelSquare>,
     pub cursor: Option<LevelCursor>,
@@ -495,7 +521,7 @@ impl Default for Menu {
             option: 0,
             timer: 0,
             level_timer: 0,
-            latched: false,
+            cursor_key: 0,
             secret_music: 0,
             version_no1: 10,
             language: 0,
@@ -507,12 +533,20 @@ impl Default for Menu {
             millisecs: 0,
             profile: None,
             level: 0,
+            level_backup: 0,
             pack: 0,
             lock_worlds: 0,
             worlds: Worlds::rtwp(),
             level_titles: vec![String::new(); LEVELS],
             level_count: 0,
             level_names: vec![Default::default(); 13],
+            custom: None,
+            files: Vec::new(),
+            file_pos: 0,
+            custom_dir: Vec::new(),
+            current_file: 0,
+            sort_by_name: true,
+            extra_music: 1,
             squares: Vec::new(),
             cursor: None,
             text: Text::default(),
@@ -568,12 +602,21 @@ impl Menu {
             // started; only what is typed on this screen counts here.
             self.typed.clear();
         } else if menu == LEVEL_SELECT {
-            // Coming from the level pack menu, which player select and
-            // new player stand in for until it is ported.
-            if matches!(self.current, LEVEL_PACKS | PLAYER_SELECT | NEW_PLAYER) {
+            if self.level == custom::LEVEL {
+                self.level = self.level_backup;
+            }
+            if self.current == LEVEL_PACKS {
                 self.actions.push(Action::LevelMusic(self.world()));
             }
             self.make_squares();
+        } else if menu == LEVEL_PACKS {
+            self.level_timer = 0;
+            self.actions.push(Action::StopMusic);
+            self.extra_music = 0;
+            self.current_file = 0;
+        } else if menu == CUSTOM_LEVELS {
+            self.typed.clear();
+            self.list_files();
         }
         self.current = menu;
         self.update_selector();
@@ -582,7 +625,7 @@ impl Menu {
 
     /// A character typed (what `GetKey` returns), for the name entry.
     pub fn type_char(&mut self, c: u8) {
-        if self.current == NEW_PLAYER {
+        if matches!(self.current, NEW_PLAYER | CUSTOM_LEVELS) {
             self.typed.push_back(c);
         }
     }
@@ -602,7 +645,7 @@ impl Menu {
     /// Takes the keys held now as already pressed, as the original does
     /// by waiting for Esc to be let go before it opens a menu.
     pub fn hold_keys(&mut self) {
-        self.latched = true;
+        self.cursor_key = 1;
     }
 
     /// `EndMenu`: hides the logos and selector and frees the letters.
@@ -641,6 +684,8 @@ impl Menu {
             DELETE_PLAYER => self.delete_player(keys, ticks),
             OPTIONS => self.options(keys, ticks, options),
             EXIT => self.exit(keys, ticks),
+            LEVEL_PACKS => self.level_packs(keys, ticks),
+            CUSTOM_LEVELS => self.custom_levels(keys, ticks),
             ONLINE => self.online(keys, ticks),
             // Ported in later steps.
             _ => self.run_ticks(ticks, false),
@@ -668,36 +713,36 @@ impl Menu {
     /// with `count` options.
     fn navigate(&mut self, keys: MenuKeys, count: i32) -> Option<Press> {
         if keys.up {
-            if !self.latched {
+            if self.cursor_key == 0 {
                 self.sound();
                 self.option -= 1;
                 if self.option == -1 {
                     self.option = count - 1;
                 }
-                self.latched = true;
+                self.cursor_key = 1;
             }
         } else if keys.down {
-            if !self.latched {
+            if self.cursor_key == 0 {
                 self.sound();
                 self.option += 1;
                 if self.option == count {
                     self.option = 0;
                 }
-                self.latched = true;
+                self.cursor_key = 1;
             }
         } else if keys.enter {
-            if !self.latched {
+            if self.cursor_key == 0 {
                 self.sound();
-                self.latched = true;
+                self.cursor_key = 1;
                 return Some(Press::Enter);
             }
         } else if keys.escape {
-            if !self.latched {
-                self.latched = true;
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
                 return Some(Press::Escape);
             }
         } else {
-            self.latched = false;
+            self.cursor_key = 0;
         }
         None
     }
@@ -807,8 +852,8 @@ impl Menu {
         self.run_ticks(ticks, false);
 
         // `CursorKeyPressed` is never cleared here.
-        if (keys.escape || keys.space || keys.enter) && !self.latched {
-            self.latched = true;
+        if (keys.escape || keys.space || keys.enter) && self.cursor_key == 0 {
+            self.cursor_key = 1;
             self.end();
             if self.timer < 0 {
                 self.timer = 0;
@@ -957,8 +1002,8 @@ impl Menu {
 
         // `KeyDown(211)` comes after Enter and before Esc.
         if keys.delete && !(keys.up || keys.down || keys.enter) {
-            if !self.latched {
-                self.latched = true;
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
                 if self.option > 0 {
                     self.to_delete = (self.option - 1) as usize;
                     self.end();
@@ -985,7 +1030,7 @@ impl Menu {
                 match loaded {
                     Ok(profile) => {
                         self.profile = Some(profile);
-                        self.play();
+                        self.start(LEVEL_PACKS);
                     }
                     Err(e) => {
                         self.actions.push(Action::Warn(e));
@@ -1001,15 +1046,351 @@ impl Menu {
         }
     }
 
-    /// `StartMenu(13)`, the level pack menu, which comes with step 4d;
-    /// until then it is as if the classic levels were picked there.
-    fn play(&mut self) {
-        self.pack = 0;
-        if let Some(p) = &mut self.profile {
-            p.world = p.world_packs[0];
+    /// `MenuLoop13`: the level packs. The description under the chosen
+    /// pack scrolls up as `LevelTimer` counts frames to 50. Enter opens
+    /// the pack's level selector in the world last played there, or the
+    /// custom levels; Esc goes back to the main menu.
+    fn level_packs(&mut self, keys: MenuKeys, ticks: u32) {
+        const ABOUT: [[&str; 4]; 4] = [
+            [
+                "A set of twenty tutorial levels:",
+                "Learn the ins and outs of basic gameplay",
+                "and practice your Wonderland skills",
+                "with a set of easy levels.",
+            ],
+            [
+                "Take Stinky and Loof on and adventure",
+                "through ten worlds and eighty-five",
+                "diverse levels of increasing difficulty.",
+                "",
+            ],
+            [
+                "Fifty levels featuring new gameplay elements",
+                "and a brand new story: Strange Rainbow",
+                "Spirits have appeared in Wonderland. Can Stinky,",
+                "Loof, and their new friends solve the mystery?",
+            ],
+            [
+                "Hundreds of custom levels created by other",
+                "Return To Wonderland players.",
+                "Visit the online community and add more",
+                "free custom levels anytime!",
+            ],
+        ];
+        let tx = &mut self.text;
+        tx.center("SELECT LEVEL PACK", 2.0, 1.0, 50);
+        tx.center("-----------------", 3.0, 1.0, 51);
+        tx.center("Tutorial Levels", 7.0, 1.0, 52);
+        tx.center("Classic Levels", 8.0, 1.0, 53);
+        tx.center("Deluxe Levels", 9.0, 1.0, 54);
+        tx.center("Custom Levels", 10.0, 1.0, 56);
+        if self.level_timer < 50 {
+            self.level_timer += 1;
         }
-        self.level = self.world() * 10;
-        self.start(LEVEL_SELECT);
+        if let Some(lines) = ABOUT.get(self.option as usize) {
+            let rise = self.level_timer as f32 / 10.0;
+            for (i, line) in lines.iter().enumerate() {
+                // The classic pack's empty last line rises at half speed.
+                let rise = if self.option == 1 && i == 3 {
+                    rise / 2.0
+                } else {
+                    rise
+                };
+                let i = i as i32;
+                tx.center(line, (19 + i) as f32 - rise, 1.0, 57 + i);
+            }
+        }
+        self.place_selector(7 + self.option, 21.5);
+        self.text.activate(|| None);
+
+        self.run_ticks(ticks, false);
+
+        if keys.up {
+            if self.cursor_key == 0 {
+                self.sound();
+                self.option -= 1;
+                if self.option == -1 {
+                    self.option = 3;
+                }
+                self.cursor_key = 1;
+                self.level_timer = 0;
+            }
+        } else if keys.down {
+            if self.cursor_key == 0 {
+                self.sound();
+                self.option += 1;
+                if self.option == 4 {
+                    self.option = 0;
+                }
+                self.cursor_key = 1;
+                self.level_timer = 0;
+            }
+        } else if keys.enter {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                self.end();
+                if self.option < 3 {
+                    // The tutorials are pack 1 and the classic levels 0.
+                    self.pack = match self.option {
+                        0 => 1,
+                        1 => 0,
+                        p => p,
+                    };
+                    let pack = self.pack as usize;
+                    if let Some(p) = &mut self.profile {
+                        p.world = p.world_packs[pack];
+                    }
+                    self.level = self.world() * 10;
+                    self.start(LEVEL_SELECT);
+                } else {
+                    self.start(CUSTOM_LEVELS);
+                }
+            }
+        } else if keys.escape {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                self.end();
+                self.start(MAIN);
+            }
+        } else {
+            self.cursor_key = 0;
+        }
+    }
+
+    /// `StartMenu(14)`: lists the folder `CurrentExtraLevelDirectory$`
+    /// with the player's scores, and puts the cursor on `CurrentFileDir`.
+    fn list_files(&mut self) {
+        let extras = self.profile.as_ref().map_or(&[][..], |p| &p.extra);
+        let listed = self.custom.as_ref().map(|c| {
+            c.list(&self.custom_dir, self.sort_by_name, extras)
+                .map_err(|e| format!("{}: {e}", c.dir.display()))
+        });
+        self.files = match listed {
+            Some(Ok(files)) => files,
+            Some(Err(e)) => {
+                self.actions.push(Action::Warn(e));
+                vec![custom::back()]
+            }
+            None => vec![custom::back()],
+        };
+        self.file_pos = 0;
+        if self.current_file > 14 {
+            self.file_pos = self.current_file - 14;
+            self.option = 14;
+        } else {
+            self.option = self.current_file;
+        }
+    }
+
+    /// The game path of the custom level `CurrentFileDir`.
+    pub fn custom_path(&self) -> Option<String> {
+        let e = self.files.get(usize::try_from(self.current_file).ok()?)?;
+        Some(CustomLevels::game_path(&self.custom_dir, &e.name))
+    }
+
+    /// The custom level `CurrentFileDir`, while one is played.
+    pub fn custom_file(&self) -> Option<&FileEntry> {
+        if self.level != custom::LEVEL {
+            return None;
+        }
+        self.files.get(usize::try_from(self.current_file).ok()?)
+    }
+
+    /// A custom level was loaded with `track` as its music track (v4 and
+    /// later name one): the track to start when `ExtraLevelMusicTrack`
+    /// changed.
+    pub fn custom_music(&mut self, track: Option<i32>) -> Option<i32> {
+        let before = self.extra_music;
+        if let Some(t) = track {
+            self.extra_music = t;
+        }
+        (self.extra_music != before).then_some(self.extra_music)
+    }
+
+    /// `MenuLoop14`: the custom levels, 15 lines at a time. The cursor
+    /// keys repeat while held; a letter jumps to the first level from it
+    /// on; Enter goes into a folder, back up, or plays the level; F1 and
+    /// F2 list by name or not; Esc goes back to the level packs.
+    fn custom_levels(&mut self, keys: MenuKeys, ticks: u32) {
+        let n = self.files.len() as i32;
+        let tx = &mut self.text;
+        tx.display(
+            "FILENAME:      LEVELNAME:                 SCORE:",
+            1.0,
+            1.0,
+            1.0,
+            51,
+        );
+        tx.display(RULE_48, 1.0, 2.0, 1.0, 52);
+        for i in 0..15 {
+            let Some(e) = self.files.get((self.file_pos + i) as usize) else {
+                continue;
+            };
+            let y = (i + 3) as f32;
+            let tag = 100 + i * 4;
+            let name = if custom::is_level_name(&e.name) {
+                &e.name[..e.name.len() - 4]
+            } else {
+                &e.name
+            };
+            tx.display(&left(name, 14), 1.0, y, 1.0, tag);
+            if e.title.chars().count() < 27 {
+                tx.display(&e.title, 16.0, y, 1.0, tag + 1);
+            } else {
+                tx.display(&(left(&e.title, 24) + "..."), 16.0, y, 1.0, tag + 1);
+            }
+            // A folder or the way back leaves the column as it was.
+            if e.score == 0 {
+                tx.display("-----", 44.0, y, 1.0, tag + 2);
+            } else if e.score > 0 {
+                tx.display(&left(&e.score.to_string(), 5), 44.0, y, 1.0, tag + 2);
+            }
+            let star = if e.perfect == 1 { "*" } else { "" };
+            tx.display(star, 49.0, y, 1.0, tag + 3);
+        }
+        self.place_selector(3 + self.option, 50.0);
+        self.text.activate(|| None);
+
+        self.run_ticks(ticks, true);
+
+        // `GetKey`: a letter goes to the first level from it on.
+        if let Some(c) = self.typed.pop_front()
+            && c.is_ascii_alphabetic()
+        {
+            let a = [c.to_ascii_uppercase()];
+            let mut i = (0..=n)
+                .find(|&i| {
+                    self.files
+                        .get(i as usize)
+                        .is_some_and(|e| a[..] <= *e.name.as_bytes() && e.score >= 0)
+                })
+                .unwrap_or(n + 1);
+            if i >= n {
+                i = n - 1;
+            }
+            if n - i >= 15 {
+                self.file_pos = i;
+                self.option = 0;
+            } else {
+                self.file_pos = n - 15;
+                if self.file_pos < 0 {
+                    self.file_pos = 0;
+                    self.option = i;
+                } else {
+                    self.option = 15 - (n - i);
+                }
+            }
+        }
+
+        // Held, the cursor moves on the first frame, then on every
+        // second frame from the sixth.
+        let repeat = self.cursor_key == 0 || (self.cursor_key > 5 && self.cursor_key % 2 == 0);
+        if keys.up {
+            if repeat {
+                self.sound();
+                self.option -= 1;
+                if self.option == -1 {
+                    self.option = 0;
+                    if self.file_pos > 0 {
+                        self.file_pos -= 1;
+                    }
+                }
+            }
+            self.cursor_key += 1;
+        } else if keys.down {
+            if repeat {
+                self.sound();
+                if self.option < n - 1 {
+                    self.option += 1;
+                }
+                if self.option == 15 {
+                    self.option = 14;
+                    if self.file_pos + 15 < n {
+                        self.file_pos += 1;
+                    }
+                }
+            }
+            self.cursor_key += 1;
+        } else if keys.page_up {
+            if self.cursor_key == 0 {
+                self.sound();
+                self.file_pos -= 15;
+                if self.file_pos < 0 {
+                    self.option += self.file_pos;
+                    self.file_pos = 0;
+                    if self.option < 0 {
+                        self.option = 0;
+                    }
+                }
+                self.cursor_key = 1;
+            }
+        } else if keys.page_down {
+            if self.cursor_key == 0 {
+                self.sound();
+                if n > 15 {
+                    self.file_pos += 15;
+                    if self.file_pos + 15 >= n {
+                        self.file_pos = n - 15;
+                        self.option = 14;
+                    }
+                } else {
+                    self.option = n - 1;
+                }
+                self.cursor_key = 1;
+            }
+        } else if keys.enter {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                self.open_file();
+            }
+        } else if keys.f1 || keys.f2 {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                self.end();
+                self.sort_by_name = keys.f1;
+                self.start(CUSTOM_LEVELS);
+            }
+        } else if keys.escape {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                self.end();
+                self.start(LEVEL_PACKS);
+            }
+        } else {
+            self.cursor_key = 0;
+        }
+    }
+
+    /// Enter on the custom levels' line under the cursor.
+    fn open_file(&mut self) {
+        let at = self.option + self.file_pos;
+        let Some(e) = self.files.get(at as usize).cloned() else {
+            return;
+        };
+        if e.score == custom::BACK {
+            self.end();
+            if self.custom_dir.pop().is_none() {
+                self.start(LEVEL_PACKS);
+            } else {
+                self.current_file = 0;
+                self.start(CUSTOM_LEVELS);
+            }
+            self.sound();
+        } else if e.score == custom::DIR {
+            self.end();
+            self.custom_dir.push(e.name);
+            self.current_file = 0;
+            self.start(CUSTOM_LEVELS);
+            self.sound();
+        } else if e.is_level() {
+            self.end();
+            if self.level != custom::LEVEL {
+                self.level_backup = self.level;
+            }
+            self.level = custom::LEVEL;
+            self.current_file = at;
+            self.actions.push(Action::StartLevel(custom::LEVEL));
+        }
     }
 
     /// `CurrentWorld`.
@@ -1272,8 +1653,8 @@ impl Menu {
 
         let back = i32::from(world % 10 != 0);
         if keys.enter {
-            if !self.latched {
-                self.latched = true;
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
                 if at < n {
                     self.free_squares();
                     self.end();
@@ -1308,51 +1689,50 @@ impl Menu {
                 }
             }
         } else if keys.left {
-            if !self.latched {
+            if self.cursor_key == 0 {
                 self.sound();
-                self.latched = true;
+                self.cursor_key = 1;
                 self.level -= 1;
                 if self.level < world * 10 {
                     self.level = world * 10 + n + back;
                 }
             }
         } else if keys.right {
-            if !self.latched {
+            if self.cursor_key == 0 {
                 self.sound();
-                self.latched = true;
+                self.cursor_key = 1;
                 self.level += 1;
                 if self.level >= world * 10 + n + 1 + back {
                     self.level = world * 10;
                 }
             }
         } else if keys.up {
-            if !self.latched && n > 5 {
+            if self.cursor_key == 0 && n > 5 {
                 self.sound();
-                self.latched = true;
+                self.cursor_key = 1;
                 self.level -= 5;
                 if self.level < world * 10 {
                     self.level = world * 10 + n - 1;
                 }
             }
         } else if keys.down {
-            if !self.latched && n > 5 {
+            if self.cursor_key == 0 && n > 5 {
                 self.sound();
-                self.latched = true;
+                self.cursor_key = 1;
                 self.level += 5;
                 if self.level > world * 10 + n - 1 {
                     self.level = world * 10 + n - 1;
                 }
             }
         } else if keys.escape {
-            if !self.latched {
-                self.latched = true;
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
                 self.free_squares();
                 self.end();
-                // The level pack menu (13) comes first in the original.
-                self.start(MAIN);
+                self.start(LEVEL_PACKS);
             }
         } else {
-            self.latched = false;
+            self.cursor_key = 0;
         }
     }
 
@@ -1404,19 +1784,19 @@ impl Menu {
             _ => None,
         };
         if let Some(c) = typed {
-            if !self.latched {
+            if self.cursor_key == 0 {
                 self.actions.push(Action::Sound(MenuSound::Type));
                 self.player_name.push(c);
-                self.latched = true;
+                self.cursor_key = 1;
             }
         } else if keys.backspace && !self.player_name.is_empty() {
-            if !self.latched {
+            if self.cursor_key == 0 {
                 self.actions.push(Action::Sound(MenuSound::Type));
                 self.player_name.pop();
-                self.latched = true;
+                self.cursor_key = 1;
             }
         } else if keys.enter {
-            if !self.latched {
+            if self.cursor_key == 0 {
                 self.actions.push(Action::Sound(MenuSound::LastCoin));
                 let profile = Profile::new(&self.player_name, self.millisecs);
                 if let Some(Err(e)) = self.players.as_ref().map(|p| p.create(&profile)) {
@@ -1424,19 +1804,19 @@ impl Menu {
                         .push(Action::Warn(format!("{}: {e}", profile.name)));
                 }
                 self.profile = Some(profile);
-                self.latched = true;
+                self.cursor_key = 1;
                 self.end();
-                self.play();
+                self.start(LEVEL_PACKS);
             }
         } else if keys.escape {
-            if !self.latched {
-                self.latched = true;
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
                 self.end();
                 // With no players this comes straight back here.
                 self.start(PLAYER_SELECT);
             }
         } else {
-            self.latched = false;
+            self.cursor_key = 0;
         }
     }
 
@@ -1825,6 +2205,14 @@ impl Menu {
 /// The 46-dash line on the player select screen.
 const RULE_46: &str = "----------------------------------------------";
 
+/// The 48-dash line on the custom levels.
+const RULE_48: &str = "------------------------------------------------";
+
+/// `Left$(s, n)`.
+fn left(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
 /// `MyGfxModeWidth`/`MyGfxModeHeight`, as `Setup` fills them in.
 pub const GFX_MODES: [(u32, u32); 5] = [
     (640, 480),
@@ -1876,6 +2264,10 @@ mod tests {
         zero: false,
         delete: false,
         backspace: false,
+        page_up: false,
+        page_down: false,
+        f1: false,
+        f2: false,
     };
 
     fn text(m: &Menu) -> String {
@@ -2096,7 +2488,10 @@ mod tests {
         type_name(&mut m, &mut o, "Ab");
         let a = press(&mut m, &mut o, ENTER);
         assert!(a.contains(&Action::Sound(MenuSound::LastCoin)));
+        assert_eq!(m.current, LEVEL_PACKS);
         // The classic levels' selector, with the first world's music.
+        press(&mut m, &mut o, DOWN);
+        let a = press(&mut m, &mut o, ENTER);
         assert_eq!((m.current, m.level), (LEVEL_SELECT, 0));
         assert!(a.contains(&Action::LevelMusic(0)));
         assert_eq!(m.profile.as_ref().unwrap().name, "AB");
@@ -2147,6 +2542,9 @@ mod tests {
         // ZED is now the only player.
         assert_eq!(m.current, PLAYER_SELECT);
         press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, ENTER);
+        assert_eq!(m.current, LEVEL_PACKS);
+        press(&mut m, &mut o, DOWN);
         let a = press(&mut m, &mut o, ENTER);
         assert_eq!(m.current, LEVEL_SELECT);
         assert!(a.contains(&Action::LevelMusic(0)));
@@ -2171,9 +2569,11 @@ mod tests {
             *t = format!("TITLE {l}#SECOND");
         }
         m.end();
-        m.start(PLAYER_SELECT);
-        m.end();
-        m.play();
+        m.start(LEVEL_PACKS);
+        // The classic levels.
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, ENTER);
         m
     }
 
@@ -2264,9 +2664,192 @@ mod tests {
         press(&mut m, &mut o, ENTER);
         assert_eq!((m.current, m.world()), (MAIN, 10));
 
-        // Esc: the main menu, for now.
+        // Esc: the level packs.
         let mut m = selector(0);
         press(&mut m, &mut o, ESCAPE);
+        assert_eq!(m.current, LEVEL_PACKS);
+    }
+
+    #[test]
+    fn level_packs_open_their_worlds() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let mut m = Menu::new();
+        let mut p = Profile::new("ZED", 0);
+        p.world_packs = [3, 12, 25, 30];
+        m.profile = Some(p);
+        m.end();
+        m.start(LEVEL_PACKS);
+        let a = m.frame(KEYS, 1, &mut o);
+        assert!(a.contains(&Action::StopMusic));
+        let t = text(&m);
+        assert!(t.contains("SELECT LEVEL PACK"), "{t}");
+        assert!(t.contains("Custom Levels"), "{t}");
+        assert!(!t.contains("Kids"), "{t}");
+        // The description rises a tenth of a line a frame, to 14.
+        let first = |m: &Menu| m.text.shown().iter().map(|l| l.y).fold(0.0, f32::max);
+        assert!((first(&m) - (22.0 - 0.1)).abs() < 1e-4);
+        for _ in 0..60 {
+            m.frame(KEYS, 1, &mut o);
+        }
+        assert!((first(&m) - 17.0).abs() < 1e-4);
+        assert_eq!(m.level_timer, 50);
+
+        // Up wraps to the custom levels and starts the text again.
+        press(&mut m, &mut o, UP);
+        assert_eq!((m.option, m.level_timer), (3, 1));
+        assert!(text(&m).contains("Hundreds of custom levels"));
+        press(&mut m, &mut o, DOWN);
+        // Enter plays no sound; the tutorials are world pack 1.
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(!a.contains(&Action::Sound(MenuSound::Move)));
+        assert!(a.contains(&Action::LevelMusic(12)));
+        assert_eq!(
+            (m.current, m.pack, m.world(), m.level),
+            (LEVEL_SELECT, 1, 12, 120)
+        );
+
+        // Esc on the selector comes back here; Esc again to the main
+        // menu and its music.
+        press(&mut m, &mut o, ESCAPE);
+        assert_eq!(m.current, LEVEL_PACKS);
+        press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, ENTER);
+        assert_eq!((m.current, m.pack, m.world()), (LEVEL_SELECT, 2, 25));
+        press(&mut m, &mut o, ESCAPE);
+        let a = press(&mut m, &mut o, ESCAPE);
         assert_eq!(m.current, MAIN);
+        assert!(a.contains(&Action::TitleMusic));
+    }
+
+    fn level_file(id: i32, title: &str) -> Vec<u8> {
+        let mut b = Vec::new();
+        for s in ["Stinky & Loof Level File v5", "x"] {
+            b.extend((s.len() as u32).to_le_bytes());
+            b.extend(s.as_bytes());
+        }
+        b.extend(id.to_le_bytes());
+        b.extend((title.len() as u32).to_le_bytes());
+        b.extend(title.as_bytes());
+        b
+    }
+
+    /// The custom level menu over a `CustomLevels` folder holding the
+    /// folder `PACK`, and `levels` level files named `L00.lev` on.
+    fn custom_menu(tag: &str, levels: usize) -> (Menu, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("wl-custom-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join(custom::FOLDER);
+        std::fs::create_dir_all(root.join("Pack")).unwrap();
+        std::fs::write(root.join("Pack/inner.lev"), level_file(99, "Inner")).unwrap();
+        for i in 0..levels {
+            let title = format!("Level number {i} with a long title");
+            std::fs::write(
+                root.join(format!("L{i:02}.lev")),
+                level_file(i as i32, &title),
+            )
+            .unwrap();
+        }
+        let mut m = Menu::new();
+        let mut p = Profile::new("ZED", 0);
+        p.record_custom_win(1, 0, 1234567, true);
+        m.profile = Some(p);
+        m.custom = Some(CustomLevels::new(&dir));
+        m.level = 37;
+        m.end();
+        m.start(CUSTOM_LEVELS);
+        (m, dir)
+    }
+
+    #[test]
+    fn custom_levels_list_open_folders_and_play() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let (mut m, dir) = custom_menu("play", 3);
+        m.frame(KEYS, 1, &mut o);
+        let t = text(&m);
+        assert!(t.contains("FILENAME:"), "{t}");
+        assert!(t.contains("..(Go Back)"), "{t}");
+        assert!(t.contains("PACK(Folder)"), "{t}");
+        // The extension is cut, long titles too, and a score has five
+        // digits at most.
+        assert!(t.contains("L00Level number 0 with a lo...-----"), "{t}");
+        assert!(t.contains("L01Level number 1 with a lo...12345*"), "{t}");
+
+        // Into the folder and back out.
+        press(&mut m, &mut o, DOWN);
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::Sound(MenuSound::Move)));
+        assert_eq!(m.custom_dir, ["PACK"]);
+        assert_eq!(m.files.len(), 2);
+        assert!(text(&m).contains("INNER"));
+        press(&mut m, &mut o, ENTER);
+        assert!(m.custom_dir.is_empty());
+        assert_eq!((m.current, m.option), (CUSTOM_LEVELS, 0));
+
+        // Playing L01 keeps `CurrentLevel` to come back to.
+        for _ in 0..3 {
+            press(&mut m, &mut o, DOWN);
+        }
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::StartLevel(custom::LEVEL)));
+        assert_eq!((m.level, m.current_file), (custom::LEVEL, 3));
+        assert_eq!(m.custom_path().as_deref(), Some("CustomLevels\\L01.LEV"));
+        assert_eq!(m.custom_file().map(|f| f.id), Some(1));
+        // Its music starts when the track changes.
+        m.extra_music = 0;
+        assert_eq!(m.custom_music(None), None);
+        assert_eq!(m.custom_music(Some(3)), Some(3));
+        assert_eq!(m.custom_music(Some(3)), None);
+
+        // Back in the list on the level played.
+        m.start(CUSTOM_LEVELS);
+        assert_eq!(m.option, 3);
+        // Esc to the packs; their selector has the level back.
+        press(&mut m, &mut o, ESCAPE);
+        assert_eq!(m.current, LEVEL_PACKS);
+        press(&mut m, &mut o, ENTER);
+        assert_eq!(m.current, LEVEL_SELECT);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn custom_levels_scroll_page_and_jump() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let (mut m, dir) = custom_menu("scroll", 30);
+        // "..", PACK, then 30 levels.
+        assert_eq!(m.files.len(), 32);
+        // Held down: a move on the first frame, then on the 7th, 9th...
+        for _ in 0..10 {
+            m.frame(DOWN, 1, &mut o);
+        }
+        assert_eq!(m.option, 3);
+        m.frame(KEYS, 1, &mut o);
+        // Down past the last line scrolls.
+        for _ in 0..13 {
+            press(&mut m, &mut o, DOWN);
+        }
+        assert_eq!((m.file_pos, m.option), (2, 14));
+        let pg_down = MenuKeys {
+            page_down: true,
+            ..KEYS
+        };
+        press(&mut m, &mut o, pg_down);
+        assert_eq!((m.file_pos, m.option), (17, 14));
+        let pg_up = MenuKeys {
+            page_up: true,
+            ..KEYS
+        };
+        press(&mut m, &mut o, pg_up);
+        assert_eq!((m.file_pos, m.option), (2, 14));
+        press(&mut m, &mut o, pg_up);
+        assert_eq!((m.file_pos, m.option), (0, 1));
+        // A letter: the first level from it on, folders skipped.
+        m.type_char(b'p');
+        m.frame(KEYS, 1, &mut o);
+        assert_eq!((m.file_pos, m.option), (17, 14));
+        m.type_char(b'l');
+        m.frame(KEYS, 1, &mut o);
+        assert_eq!((m.file_pos, m.option), (2, 0));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

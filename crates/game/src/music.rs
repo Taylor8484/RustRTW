@@ -5,8 +5,9 @@
 //! The menus play the title music (`res7.dat`). The level selector starts
 //! a world's track (`StartLevelMusic`) when it is entered from the pack
 //! menu or moves to another world, and the track plays on through that
-//! world's levels and back in the selector. Custom levels' own tracks
-//! (`ExtraLevelMusicTrack`) come with step 4d.
+//! world's levels and back in the selector. A custom level starts its own
+//! track (`ExtraLevelMusicTrack`) when it names another one than the
+//! last, and the track plays on in the custom level menu.
 
 use std::collections::HashMap;
 use std::num::NonZero;
@@ -111,6 +112,21 @@ pub fn world_track(world: i32) -> Track {
     Track { file, scale }
 }
 
+/// The music for `ExtraLevelMusicTrack = track`, as the custom level
+/// menu starts it. Tracks 1 and 5 play at half the music level.
+pub fn extra_track(track: i32) -> Track {
+    let file = match track {
+        1 => "res4.dat",
+        2 => "res3.dat",
+        3 => "res5.dat",
+        4 => "res6.dat",
+        5 => "res7.dat",
+        _ => "res8.dat",
+    };
+    let scale = if matches!(track, 1 | 5) { 0.5 } else { 1.0 };
+    Track { file, scale }
+}
+
 /// What the music should do next: `Some(track)` (re)starts it, `None`
 /// stops it (`StopChannel Music`).
 #[derive(Resource, Default)]
@@ -187,6 +203,22 @@ fn follow_volume(data: Res<GameData>, mut sinks: Query<(&Playing, &mut AudioSink
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_levels_name_their_track() {
+        assert_eq!(
+            extra_track(1),
+            Track {
+                file: "res4.dat",
+                scale: 0.5
+            }
+        );
+        assert_eq!(extra_track(5).scale, 0.5);
+        assert_eq!(extra_track(2).file, "res3.dat");
+        // Anything else, 0 included, is `res8.dat`.
+        assert_eq!(extra_track(0).file, "res8.dat");
+        assert_eq!(extra_track(9).file, "res8.dat");
+    }
 
     #[test]
     fn worlds_find_their_track() {

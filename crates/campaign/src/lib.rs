@@ -3,8 +3,11 @@
 //!
 //! - [`profile`]: RTWP's player profiles (`CreateNewPlayer`, `LoadPlayer`,
 //!   `SavePlayer`) and the `players` folder the player select screen lists.
+//! - [`custom`]: RTWP's custom levels, the `CustomLevels` folder as the
+//!   custom level menu lists it.
 //! - [`worlds`]: RTWP's worlds and level list (`data/rtwp.ron`) and the
 //!   level selector's rules.
 
+pub mod custom;
 pub mod profile;
 pub mod worlds;

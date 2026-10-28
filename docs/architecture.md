@@ -138,6 +138,13 @@ level packs, WSW's world map and story screens.
   same name, deletion to `.bak`, old-format files renamed `.old`).
   Loading reads like Blitz, zeros past the end, so a new player's short
   file loads with levels 1 to 3 marked perfect, as in the original.
+- `custom` — RTWP's custom levels: the `CustomLevels` folder (and its
+  subfolders) as the custom level menu lists it: the way back, the
+  folders, then the level files (`.lev`, `.lv5`, `.lv6`) whose first 20
+  bytes add up to 1380, with each one's title, map id and the player's
+  score for that id. Names are kept upper case, as the original lists
+  them, and found ignoring case. The profile keeps a custom level's
+  score by map id (`Profile::record_custom_win`).
 - `worlds` — RTWP's world table (`WorldLevelNames`), kept in
   `data/rtwp.ron` and embedded in the build: world `w` holds levels
   `w*10` to `w*10+9` (`CurrentLevel`, the index into the profile's
@@ -209,7 +216,10 @@ pinned and upgraded deliberately.
   and streams them as a looping Bevy audio source: the title music in
   the menus, and the world's track (`StartLevelMusic`), which the level
   selector starts when it is entered from the pack menu or changes
-  world, and which plays on through the world's levels.
+  world, and which plays on through the world's levels. A custom level
+  starts its own track (`ExtraLevelMusicTrack`) when it names another
+  one than the last level loaded; the pack menu resets it and stops the
+  music.
 - **Plugins:** `SimPlugin` runs ticks from `logic::Clock` and keeps the
   frame's events; `ScenePlugin` builds the level (`level_mesh`, `style`,
   `texture`), lights it and scrolls the water and conveyor textures;
@@ -221,8 +231,10 @@ pinned and upgraded deliberately.
   `FlowPlugin` holds the `Phase` (`GamePhase`: menus or play), gives
   each level the player's record, keeps a won level's score and saves
   the player, restarts a lost level, goes back to the level selector
-  with the next level after a win, and to the selector on Esc (the
-  in-game menu is step 4f). `--level` play has no player and moves on
+  with the next level after a win (to the custom levels after a custom
+  one), and to either on Esc (the in-game menu is step 4f). A custom
+  level's record and score are kept only in English, as in the
+  original. `--level` play has no player and moves on
   through a `Playlist` in pack order;
   `MenuScenePlugin` runs the menus and draws their background. The level
   plugins run only in `Phase::Game`.
@@ -233,7 +245,12 @@ pinned and upgraded deliberately.
   carry out. The player being played is the menus' `Menu::profile`, and
   `CurrentLevel` is `Menu::level`. Player select, new player and delete
   player (menus 2, 3, 6) read and write the profiles through
-  `campaign::profile`. The level selector (menu 4) draws its squares and
+  `campaign::profile`. The level pack menu (13) opens a pack's level
+  selector in the world last played there, or the custom levels (14),
+  which list `CustomLevels` through `campaign::custom` and play a level
+  as `CurrentLevel=-999` (`Menu::custom_path`). The kids pack's line is
+  commented out in the original, so it is not offered. The level
+  selector (menu 4) draws its squares and
   spinning cursor as screen images at their 3D depth, from
   `levelsigns2.bmp`'s quarters and `levelperfect.bmp`; its level titles
   are read from the level files once at start-up. The name

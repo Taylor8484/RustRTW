@@ -12,21 +12,28 @@
 //! record, and a won level's score is kept and the player saved
 //! (`SavePlayer`). The player is the menus' [`Menu::profile`].
 //!
+//! A custom level (`CurrentLevel=-999`) goes back to the custom level
+//! menu when won. Its record is the player's score for its map id, and a
+//! win is kept only in English, as `ControlCoins` has no code for it in
+//! the other languages; the player is saved either way.
+//!
 //! `--level` plays without the menus, through a [`Playlist`]: a won level
 //! goes on to the next in pack order, and nothing is recorded.
 //!
-//! Esc goes back to the level selector (or the main menu with no player),
-//! where the original opens its in-game menu (step 4f).
+//! Esc goes back to the level selector or the custom levels (or the main
+//! menu with no player), where the original opens its in-game menu (step
+//! 4f).
 //!
 //! [`Menu::level`]: crate::menu::Menu::level
 //! [`Menu::profile`]: crate::menu::Menu::profile
 
 use bevy::prelude::*;
+use wonderland_campaign::custom;
 use wonderland_logic::{Completion, Event, Session};
 
 use crate::audio::MenuSounds;
 use crate::level::{GameData, LevelData};
-use crate::menu::{LEVEL_SELECT, MAIN, Menu, MenuSound};
+use crate::menu::{CUSTOM_LEVELS, LEVEL_SELECT, MAIN, Menu, MenuSound};
 use crate::menu_scene::MenuState;
 use crate::objects::clear_pools;
 use crate::scene::{LevelEntity, spawn_level};
@@ -68,9 +75,15 @@ impl Playlist {
 }
 
 /// The player's best score for the level being played, when it is
-/// theirs.
+/// theirs. For a custom level only English shows the record line.
 pub fn record(menu: &Menu) -> Option<i32> {
-    menu.profile.as_ref()?.record(menu.level)
+    let profile = menu.profile.as_ref()?;
+    if menu.level == custom::LEVEL {
+        let file = menu.custom_file()?;
+        let r = profile.custom_record(file.id)?;
+        return (menu.language == 0).then_some(r.score);
+    }
+    profile.record(menu.level)
 }
 
 pub struct FlowPlugin;
@@ -127,12 +140,19 @@ fn record_wins(sim: Res<Sim>, playlist: Option<Res<Playlist>>, state: Option<Res
         return;
     };
     let menu = &mut state.menu;
+    let file = menu.custom_file().map(|f| (f.id, f.id2));
     let Some(profile) = &mut menu.profile else {
         return;
     };
     for e in &sim.events {
         if let Event::LevelWon { score, perfect } = *e {
-            profile.record_win(menu.level, score, perfect);
+            match file {
+                Some((id, id2)) if menu.language == 0 => {
+                    profile.record_custom_win(id, id2, score, perfect)
+                }
+                Some(_) => {}
+                None => profile.record_win(menu.level, score, perfect),
+            }
             if let Some(players) = &menu.players
                 && let Err(e) = players.save(profile)
             {
@@ -187,10 +207,16 @@ fn finish_level(
             rebuild(&mut commands, &entities);
         }
         Completion::Done if state.is_some() => {
-            // `CurrentLevel=CurrentLevel+1`, `StartMenu(4)`.
+            // `CurrentLevel=CurrentLevel+1`, `StartMenu(4)`, or
+            // `StartMenu(14)` after a custom level.
             if let Some(state) = &mut state {
-                state.menu.level += 1;
-                state.menu.start(LEVEL_SELECT);
+                let menu = &mut state.menu;
+                if menu.level == custom::LEVEL {
+                    menu.start(CUSTOM_LEVELS);
+                } else {
+                    menu.level += 1;
+                    menu.start(LEVEL_SELECT);
+                }
             }
             next.set(Phase::Menu);
         }
@@ -234,7 +260,11 @@ fn to_menu(
         // Esc is still down: the menu must not take it as a press.
         menu.hold_keys();
         if menu.profile.is_some() && playlist.is_none() {
-            menu.start(LEVEL_SELECT);
+            menu.start(if menu.level == custom::LEVEL {
+                CUSTOM_LEVELS
+            } else {
+                LEVEL_SELECT
+            });
         } else {
             menu.start(MAIN);
         }
@@ -259,5 +289,33 @@ mod tests {
             index: 0,
         };
         assert_eq!(empty.advance(), None);
+    }
+
+    #[test]
+    fn custom_records_show_only_in_english() {
+        use wonderland_campaign::custom::FileEntry;
+        use wonderland_campaign::profile::Profile;
+        let mut menu = Menu::default();
+        let mut p = Profile::new("ZED", 0);
+        p.record_custom_win(7, 0, 900, false);
+        p.scores[3] = 400;
+        menu.profile = Some(p);
+        menu.level = 3;
+        assert_eq!(record(&menu), Some(400));
+        menu.files = vec![FileEntry {
+            name: "A.LEV".into(),
+            title: "A".into(),
+            id: 7,
+            id2: 0,
+            score: 900,
+            perfect: 0,
+        }];
+        menu.level = custom::LEVEL;
+        assert_eq!(record(&menu), Some(900));
+        menu.language = 1;
+        assert_eq!(record(&menu), None);
+        menu.language = 0;
+        menu.files[0].id = 8;
+        assert_eq!(record(&menu), None);
     }
 }

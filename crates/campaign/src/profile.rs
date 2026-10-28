@@ -69,13 +69,17 @@ pub struct Profile {
 }
 
 /// Reads like Blitz's file streams: zeros past the end.
-struct Lenient<'a> {
+pub(crate) struct Lenient<'a> {
     data: &'a [u8],
     pos: usize,
 }
 
-impl Lenient<'_> {
-    fn int(&mut self) -> i32 {
+impl<'a> Lenient<'a> {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    pub(crate) fn int(&mut self) -> i32 {
         let mut b = [0u8; 4];
         for (i, x) in b.iter_mut().enumerate() {
             *x = self.data.get(self.pos + i).copied().unwrap_or(0);
@@ -84,7 +88,7 @@ impl Lenient<'_> {
         i32::from_le_bytes(b)
     }
 
-    fn string(&mut self) -> String {
+    pub(crate) fn string(&mut self) -> String {
         let len = self.int().max(0) as usize;
         let start = self.pos.min(self.data.len());
         let end = self.pos.saturating_add(len).min(self.data.len());
@@ -264,6 +268,35 @@ impl Profile {
             && perfect
         {
             *p = 1;
+        }
+    }
+
+    /// The player's record for the custom level with map id `id`: the
+    /// first one stored with it.
+    pub fn custom_record(&self, id: i32) -> Option<&ExtraRecord> {
+        self.extra.iter().find(|e| e.id == id)
+    }
+
+    /// A custom level won (`CurrentLevel=-999` in `ControlCoins`, which
+    /// only does this in English). A level played before keeps the
+    /// better score, and only a better score can mark it perfect; a new
+    /// one is added with its score and perfect flag. The caller saves
+    /// the profile then.
+    pub fn record_custom_win(&mut self, id: i32, id2: i32, score: i32, perfect: bool) {
+        if let Some(e) = self.extra.iter_mut().find(|e| e.id == id) {
+            if score > e.score {
+                e.score = score;
+                if e.perfect == 0 && perfect {
+                    e.perfect = 1;
+                }
+            }
+        } else if self.extra.len() < MAX_EXTRA {
+            self.extra.push(ExtraRecord {
+                id,
+                id2,
+                score,
+                perfect: i32::from(perfect),
+            });
         }
     }
 }
@@ -498,5 +531,29 @@ mod tests {
         assert_eq!(list.len(), MAX_PLAYERS);
         assert_eq!(list[9].file_stem, "p09");
         fs::remove_dir_all(&game).unwrap();
+    }
+
+    #[test]
+    fn custom_wins_add_a_record_or_keep_the_better_one() {
+        let mut p = Profile::new("A", 0);
+        p.record_custom_win(5, 77, 300, false);
+        assert_eq!(
+            p.custom_record(5).map(|e| (e.id2, e.score, e.perfect)),
+            Some((77, 300, 0))
+        );
+        // Perfect without a better score changes nothing.
+        p.record_custom_win(5, 0, 200, true);
+        assert_eq!(
+            p.custom_record(5).map(|e| (e.score, e.perfect)),
+            Some((300, 0))
+        );
+        p.record_custom_win(5, 0, 400, true);
+        assert_eq!(
+            p.custom_record(5).map(|e| (e.id2, e.score, e.perfect)),
+            Some((77, 400, 1))
+        );
+        p.record_custom_win(6, 1, 50, true);
+        assert_eq!(p.extra.len(), 2);
+        assert_eq!(p.custom_record(6).map(|e| e.perfect), Some(1));
     }
 }
