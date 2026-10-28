@@ -15,6 +15,7 @@
 //! - [`objects::ObjectsPlugin`]: the players, boxes, monsters, items and
 //!   the rest, from [`model`]'s models.
 //! - [`audio::AudioPlugin`]: the sound effects.
+//! - [`music::MusicPlugin`]: the title and world music.
 //! - [`particles::ParticlesPlugin`]: explosions, sparkles, trails and
 //!   weather.
 //! - [`shot::ShotPlugin`]: `WL_SCREENSHOT` saves a frame and quits.
@@ -40,6 +41,7 @@ pub mod lighting;
 pub mod menu;
 pub mod menu_scene;
 pub mod model;
+pub mod music;
 pub mod objects;
 pub mod particles;
 pub mod scene;
@@ -61,6 +63,7 @@ impl Plugin for GamePlugins {
             camera::CameraPlugin,
             objects::ObjectsPlugin,
             audio::AudioPlugin,
+            music::MusicPlugin,
             particles::ParticlesPlugin,
             hud::HudPlugin,
             flow::FlowPlugin,

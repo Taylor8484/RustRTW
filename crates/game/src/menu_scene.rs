@@ -35,6 +35,7 @@ use crate::level::GameData;
 use crate::lighting::factor;
 use crate::menu::{Action, Menu, MenuKeys, Selector, exit_sound};
 use crate::model::{Geometry, cylinder_segments, flip, sphere_segments};
+use crate::music::MusicRequest;
 use crate::objects::vertex_colour;
 use crate::particles::frame;
 use crate::scene::TextureCache;
@@ -193,6 +194,7 @@ fn menu_frame(
     mut sounds: ResMut<MenuSounds>,
     mut next: ResMut<NextState<Phase>>,
     sim: Option<Res<Sim>>,
+    mut music: ResMut<MusicRequest>,
 ) {
     let now = now_ms(&time);
     let ticks = state.clock.advance(now).ticks;
@@ -205,6 +207,8 @@ fn menu_frame(
     for a in actions {
         match a {
             Action::Sound(s) => sounds.0.push(s),
+            Action::TitleMusic => music.0 = Some(Some(crate::music::TITLE)),
+            Action::StopMusic => music.0 = Some(None),
             // `TweenTime=MilliSecs()-TweenPeriod`.
             Action::Entered(_) => st.clock = Clock::new(&data.ruleset, now),
             Action::OptionsChanged => data.apply_config(),

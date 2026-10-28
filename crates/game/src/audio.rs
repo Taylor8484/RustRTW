@@ -9,7 +9,7 @@
 //!
 //! The menus queue their sounds in [`MenuSounds`], played in any phase.
 //!
-//! Music (`.it` modules) is not played yet.
+//! Music is in [`crate::music`].
 
 use std::collections::HashMap;
 use std::sync::Arc;

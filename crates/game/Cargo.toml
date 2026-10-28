@@ -47,6 +47,9 @@ bevy = { version = "=0.20.0", default-features = false, features = [
 ] }
 # PNG only for `WL_SCREENSHOT`.
 image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png"] }
+# Impulse Tracker music (`res3.dat` to `res8.dat`), mixed in Rust.
+xmrs = "0.15"
+xmrsplayer = "0.15"
 wonderland-formats = { path = "../formats" }
 wonderland-logic = { path = "../logic" }
 

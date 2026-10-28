@@ -70,3 +70,32 @@ fn every_rtwp_level_builds_its_scene() {
         texture::decode(&bytes, *flags).unwrap_or_else(|e| panic!("{path}: {e}"));
     }
 }
+
+/// Every track the menus and worlds play decodes and is not silent, and
+/// every level the world table names is in the pack.
+#[test]
+fn the_music_plays_and_the_worlds_name_real_levels() {
+    use bevy::audio::Decodable;
+    use wonderland_game::music::{TITLE, Tune, world_levels, world_track};
+
+    let Some(dir) = assets_dir() else {
+        eprintln!("skipping: no RTWP assets");
+        return;
+    };
+    let data = GameData::open(&dir).unwrap();
+    let mut files: BTreeSet<&str> = (0..30).map(|w| world_track(w).file).collect();
+    files.insert(TITLE.file);
+    for file in files {
+        let tune = Tune::load(&data, file).unwrap();
+        let loud = tune
+            .decoder()
+            .take(44_100 * 4)
+            .filter(|s| s.abs() > 1e-3)
+            .count();
+        assert!(loud > 1000, "{file}: silent");
+    }
+    // World 9 opens with `res10.dat`, a level kept under a resource name.
+    for name in world_levels().filter(|n| *n != "res10") {
+        assert!(data.find_level(name).is_some(), "{name} is not in the pack");
+    }
+}

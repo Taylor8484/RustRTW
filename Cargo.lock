@@ -5742,6 +5742,8 @@ dependencies = [
  "image",
  "wonderland-formats",
  "wonderland-logic",
+ "xmrs",
+ "xmrsplayer",
 ]
 
 [[package]]

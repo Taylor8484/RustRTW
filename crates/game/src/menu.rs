@@ -82,6 +82,10 @@ pub enum Action {
     Quit {
         url: Option<&'static str>,
     },
+    /// `PlayMusic("res7.dat")`.
+    TitleMusic,
+    /// `StopChannel Music`.
+    StopMusic,
 }
 
 /// The pages the original sends `VersionNo1` codes to on exit.
@@ -366,11 +370,10 @@ impl Default for Menu {
 
 impl Menu {
     /// The menus as the game starts them: `MenuSetup`, then
-    /// `StartMenu(0)`.
+    /// `StartMenu(0)`. The title music comes with the first frame.
     pub fn new() -> Self {
         let mut m = Self::default();
         m.start(TITLE);
-        m.actions.clear();
         m
     }
 
@@ -385,6 +388,14 @@ impl Menu {
             self.timer = -500;
             self.background.light = [0; 3];
             self.background.ambient = [0; 3];
+            self.actions.push(Action::TitleMusic);
+        } else if menu == MAIN {
+            // Not when coming back from a menu that kept it playing.
+            if !matches!(self.current, 7 | 9 | 10 | 0 | 15) {
+                self.actions.push(Action::TitleMusic);
+            }
+        } else if menu == PLAYER_SELECT || menu == 3 {
+            self.actions.push(Action::StopMusic);
         }
         self.current = menu;
         self.update_selector();
@@ -1137,7 +1148,7 @@ mod tests {
         let mut o = ConfigOptions::defaults(Game::Rtwp);
         let mut m = Menu::new();
         m.start(MAIN);
-        assert_eq!(m.frame(KEYS, 0, &mut o), vec![Action::Entered(MAIN)]);
+        assert!(m.frame(KEYS, 0, &mut o).contains(&Action::Entered(MAIN)));
         let a = press(&mut m, &mut o, MenuKeys { up: true, ..KEYS });
         assert_eq!(m.option, 5);
         assert_eq!(a, vec![Action::Sound(MenuSound::Move)]);

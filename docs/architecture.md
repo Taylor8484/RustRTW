@@ -189,7 +189,11 @@ pinned and upgraded deliberately.
   particles with its own random numbers (`particles`); fireball trails and
   weather follow from the state. `audio` maps each `logic::Sound` to the
   file `LoadSounds` loads (custom voices first) with its pitch and
-  volume. Music is not played yet.
+  volume. `music` mixes the Impulse Tracker modules with `xmrsplayer`
+  and streams them as a looping Bevy audio source: the title music in
+  the menus, and in play the world's track (`StartLevelMusic`), started
+  when play moves into another world. Until the campaign the world comes
+  from a copy of `WorldLevelNames` in `music.rs`.
 - **Plugins:** `SimPlugin` runs ticks from `logic::Clock` and keeps the
   frame's events; `ScenePlugin` builds the level (`level_mesh`, `style`,
   `texture`), lights it and scrolls the water and conveyor textures;
