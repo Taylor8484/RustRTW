@@ -95,8 +95,12 @@ pub const TITLE: Track = Track {
 };
 
 /// `StartLevelMusic` for `CurrentWorld = world`. Worlds 8 and 28 (counted
-/// from 1) play at half the music level.
+/// from 1) play at half the music level. TOW's worlds (30 on) and the
+/// playground play TOW's choice, [`tow_world_track`].
 pub fn world_track(world: i32) -> Track {
+    if world >= 30 {
+        return tow_world_track(world - 30);
+    }
     let file = match world + 1 {
         1 | 5 | 23 | 25 | 12 => "res5.dat",
         3 | 9 | 27 => "res8.dat",
@@ -109,6 +113,20 @@ pub fn world_track(world: i32) -> Track {
     } else {
         1.0
     };
+    Track { file, scale }
+}
+
+/// TOW's `StartLevelMusic` for its world `world` (the full version; the
+/// playground is TOW's world 40). Its world 8 plays at half the music
+/// level. TOW's modules are the same files as RTWP's.
+pub fn tow_world_track(world: i32) -> Track {
+    let file = match world + 1 {
+        4 | 9 => "res6.dat",
+        2 | 6 | 10 => "res5.dat",
+        8 => "res4.dat",
+        _ => "res3.dat",
+    };
+    let scale = if world + 1 == 8 { 0.5 } else { 1.0 };
     Track { file, scale }
 }
 

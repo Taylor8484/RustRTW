@@ -145,11 +145,17 @@ level packs, WSW's world map and story screens.
   score for that id. Names are kept upper case, as the original lists
   them, and found ignoring case. The profile keeps a custom level's
   score by map id (`Profile::record_custom_win`).
-- `worlds` — RTWP's world table (`WorldLevelNames`), kept in
-  `data/rtwp.ron` and embedded in the build: world `w` holds levels
-  `w*10` to `w*10+9` (`CurrentLevel`, the index into the profile's
-  scores), in packs of ten worlds (classic, tutorial, deluxe, kids;
-  levels 400 on are the playground, whose files RTWP does not ship).
+- `worlds` — the world tables (`WorldLevelNames`), RTWP's in
+  `data/rtwp.ron` and TOW's in `data/tow.ron`, embedded in the build:
+  world `w` holds levels `w*10` to `w*10+9` (`CurrentLevel`, the index
+  into the profile's scores), in packs of ten worlds (classic,
+  tutorial, deluxe, kids). The game's table (`Worlds::game`) puts TOW's
+  ten worlds in pack 3, the kids pack the original never reaches, so a
+  player's TOW scores, perfect flags and last TOW world go in those
+  slots of the RTWP player file. Levels 400 on are TOW's playground
+  (the same files RTWP lists without shipping them) and 410 TOW's
+  ending stage. Each world records which game's folder its files are
+  in (`Content`), and TOW's worlds have German and French names too.
   Also the level selector's rules: a world's level count, whether the
   gate forward is open (every level of the pack so far won, or
   `LockWorlds`), the pack's total score and a title's `#` line breaks.
@@ -170,7 +176,17 @@ pinned and upgraded deliberately.
 - **Run:** `wonderland [--assets <dir>] [--level <name>] [--windowed]
   [--pillarbox] [--backend dx12|vulkan|gl]` starts RTWP at its title screen, or with
   `--level` straight in that level, from `<dir>/RTWP`, where `<dir>`
-  defaults to `$WL_ASSETS`, else `assets`. The window's size and full
+  defaults to `$WL_ASSETS`, else `assets`. TOW's levels are read from
+  `<dir>/TOW` when it is there; `--level` looks in TOW's pack for a
+  name RTWP's lacks.
+- **TOW as content:** a TOW level file is parsed as TOW reads it (v1,
+  no map id), then set up and played under RTWP's rules
+  (`GameData::load_content_level`). TOW's bonus levels came as a
+  separate download, so a TOW level missing from `levels\` is also
+  looked for in the TOW folder itself. TOW's levels use RTWP's models,
+  textures and players: RTWP's first two players are Stinky and Loof.
+  TOW's world music (`music::tow_world_track`) uses modules RTWP ships
+  too. The window's size and full
   screen setting come from `options.cfg` (`MyGfxMode`, `MyWindowed`);
   full screen is borderless at the desktop's resolution, and
   `--windowed` keeps a window.
@@ -246,7 +262,9 @@ pinned and upgraded deliberately.
   `CurrentLevel` is `Menu::level`. Player select, new player and delete
   player (menus 2, 3, 6) read and write the profiles through
   `campaign::profile`. The level pack menu (13) opens a pack's level
-  selector in the world last played there, or the custom levels (14),
+  selector in the world last played there (with two more lines: TOW's
+  worlds as pack 3, and TOW's playground selector, TOW's menu 8, with
+  no gates or scores), or the custom levels (14),
   which list `CustomLevels` through `campaign::custom` and play a level
   as `CurrentLevel=-999` (`Menu::custom_path`). The kids pack's line is
   commented out in the original, so it is not offered. The level

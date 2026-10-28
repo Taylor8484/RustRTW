@@ -1,0 +1,23 @@
+// TOW's worlds, from `WorldLevelNames` in `TOW/globals.bb`. They play as
+// RTWP's world pack 3 (worlds 30 to 39, levels 300 to 399), the kids pack
+// RTWP never reaches, so their scores keep to those slots of the player
+// file. `names` are `WorldName$` in English, German and French. The
+// playground is TOW's world 40 (`PlayGroundLevel = 400`, the same in
+// RTWP), and `theend.lev` (level 410) is the ending's stage. An empty file
+// name is an empty slot; trailing empty slots are left out.
+(
+    worlds: [
+        (names: ["TRAINING GROUNDS", "UEBUNGSGELAENDE", "L'ENTRAINEMENT"], levels: ["tut1.lev", "tut2.lev", "tut3.lev", "tut4.lev", "tut5.lev"]), // 30
+        (names: ["THE WATER PALACE", "DER WASSERPALAST", "LE PALAIS D'EAU"], levels: ["castleb.lev", "fishy.lev", "coily.lev", "friends.lev", "telebroken.lev", "airlock.lev", "loofrescue.lev", "bombintro.lev"]), // 31
+        (names: ["WINTER IN WONDERLAND", "WINTER IM WONDERLAND", "L'HIVER A WONDERLAND"], levels: ["iceintro.lev", "centreice.lev", "fishbarrel.lev", "heretheycome.lev", "collide.lev", "soclose.lev", "ricochet.lev", "spiral.lev", "steelintro.lev", "fireice.lev"]), // 32
+        (names: ["THE HALLS OF UNDERMOUNTAIN", "DIE SAELE IM GEBIRGE", "LES GALERIES DE LA CAVERNE"], levels: ["trialfire.lev", "guarcent.lev", "claus1.lev", "hounds.lev", "blastthru.lev", "crossfire.lev", "moneymaze.lev", "barrel.lev", "corridor.lev"]), // 33
+        (names: ["TOP OF THE WORLD", "DACH DER WELT", "LE SOMMET DU MONDE"], levels: ["robotintro.lev", "slip.lev", "towerhop.lev", "teamwork.lev", "robowater.lev"]), // 34
+        (names: ["DESERT CITIES", "WUESTENSTAEDTE", "LES VILLES DU DESERT"], levels: ["temple.lev", "longway.lev", "separate.lev", "jones.lev", "river.lev", "greedy.lev", "sort.lev", "whoops.lev", "moats.lev", "prisoners.lev"]), // 35
+        (names: ["SPACED OUT", "IM WELTRAUM", "PERDU DANS L'ESPACE"], levels: ["tictac.lev", "robotcity.lev", "tight.lev", "pacman.lev", "timerintro.lev", "timegates.lev", "pushshove.lev", "scouge.lev"]), // 36
+        (names: ["MIXED UP STINKY & LOOF", "STINKY & LOOF", "STINKY & LOOF CONFONDUS"], levels: ["network.lev", "dizzy.lev", "tensecs.lev", "slipslide.lev", "boxfactory.lev"]), // 37
+        (names: ["HEART OF THE VOLCANO", "IM HERZEN DES VULKANS", "AU COEUR DU VOLCAN"], levels: ["cavein.lev", "firewall.lev", "bombsalot.lev", "armoury.lev", "bombwalk.lev", "onecoin.lev", "readyrun.lev", "shortsweet.lev", "stuck.lev", "teletrap.lev"]), // 38
+        (names: ["THE JADE TEMPLE", "DER JADE-TEMPEL", "LE TEMPLE DE JADE"], levels: ["oneshot.lev", "threebox.lev", "evasive.lev", "return.lev", "gofirst.lev", "teleconfound.lev", "guarbut.lev", "walk.lev", "capital.lev", "lastone.lev"]), // 39
+    ],
+    playground: ["play1.lev", "play2.lev", "play3.lev", "play4.lev", "play5.lev", "bonus1.lev", "bonus2.lev", "bonus3.lev", "bonus4.lev", "bonus5.lev"],
+    ending: "theend.lev",
+)

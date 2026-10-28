@@ -102,12 +102,12 @@ fn main() -> ExitCode {
     let start = match &args.level {
         None => None,
         Some(n) => {
-            let Some(name) = data.find_level(n) else {
+            let Some((content, name)) = data.find_level(n) else {
                 eprintln!("no such level: {n}");
                 return ExitCode::FAILURE;
             };
-            match begin(&data, &name, Session::default(), 0, None) {
-                Ok((level, sim)) => Some((level, sim, Playlist::from_pack(&data, &name))),
+            match begin(&data, content, &name, Session::default(), 0, None) {
+                Ok((level, sim)) => Some((level, sim, Playlist::from_pack(&data, content, &name))),
                 Err(e) => {
                     eprintln!("{e}");
                     return ExitCode::FAILURE;
@@ -165,7 +165,7 @@ fn main() -> ExitCode {
     }
     if let Some((level, sim, playlist)) = start {
         // `StartLevelMusic` for the world that lists the level.
-        if let Some(l) = Worlds::rtwp().index_of(&level.name) {
+        if let Some(l) = Worlds::game().index_of(playlist.content, &level.name) {
             app.insert_resource(MusicRequest(Some(Some(world_track(l / 10)))));
         }
         app.insert_resource(level)

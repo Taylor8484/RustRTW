@@ -29,7 +29,6 @@ use bevy::prelude::*;
 use wonderland_campaign::custom::{self, CustomLevels};
 use wonderland_campaign::profile::Players;
 use wonderland_campaign::worlds::{LEVELS, Worlds};
-use wonderland_formats::Game;
 use wonderland_formats::level::Level;
 use wonderland_logic::world::Lights;
 use wonderland_logic::{Clock, Session};
@@ -110,6 +109,7 @@ fn setup_menu(mut commands: Commands, data: Res<GameData>, time: Res<Time<Real>>
     let mut menu = Menu::new();
     menu.players = Some(Players::new(data.assets.dir()));
     menu.custom = Some(CustomLevels::new(data.assets.dir()));
+    menu.tow = data.tow.is_some();
     menu.level_titles = level_titles(&data, &menu.worlds);
     // `WL_PLAYER=<name>`: that player's progress, for screenshots.
     if let (Ok(name), Some(players)) = (std::env::var("WL_PLAYER"), &menu.players) {
@@ -151,8 +151,9 @@ fn level_titles(data: &GameData, worlds: &Worlds) -> Vec<String> {
     (0..LEVELS as i32)
         .map(|l| {
             let path = worlds.level_path(l)?;
-            let bytes = data.assets.read(&path).ok()?;
-            match Level::parse(&bytes, Game::Rtwp) {
+            let content = worlds.content(l);
+            let bytes = data.read_level(content, &path).ok()?;
+            match Level::parse(&bytes, content.game()) {
                 Ok(level) => Some(level.description),
                 Err(e) => {
                     warn!("{path}: {e}");
@@ -336,9 +337,10 @@ fn menu_frame(
                 } else {
                     st.menu.worlds.level_path(level)
                 };
+                let content = st.menu.worlds.content(level);
                 match path
                     .ok_or_else(|| format!("no level {level}"))
-                    .and_then(|path| begin(&data, &path, session, now, record))
+                    .and_then(|path| begin(&data, content, &path, session, now, record))
                 {
                     Ok((level, sim)) => {
                         // `ExtraLevelMusicTrack` changed: its music.
@@ -352,11 +354,12 @@ fn menu_frame(
                     }
                     Err(e) => {
                         error!("{e}");
-                        st.menu.start(if custom {
+                        let back = if custom {
                             crate::menu::CUSTOM_LEVELS
                         } else {
-                            crate::menu::LEVEL_SELECT
-                        });
+                            st.menu.selector_menu()
+                        };
+                        st.menu.start(back);
                     }
                 }
             }

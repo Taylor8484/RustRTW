@@ -25,7 +25,7 @@ fn every_rtwp_level_builds_its_scene() {
         return;
     };
     let data = GameData::open(&dir).unwrap();
-    let names = data.level_names();
+    let names = data.level_names(wonderland_campaign::worlds::Content::Rtwp);
     assert_eq!(names.len(), 85 + 71);
 
     let mut paths = BTreeSet::new();
@@ -103,5 +103,46 @@ fn the_music_plays_and_the_worlds_name_real_levels() {
         let path = worlds.level_path(level).unwrap();
         let loaded = data.load_level(&path).map(|l| l.level.description);
         assert!(loaded.is_ok(), "level {level}: {loaded:?}");
+    }
+}
+
+/// Every TOW level the game's table names (its ten worlds, the
+/// playground with the loose bonus levels, and the ending's stage)
+/// loads from `assets/TOW`, sets up under RTWP's rules and builds its
+/// scene.
+#[test]
+fn every_tow_level_in_the_table_loads() {
+    use wonderland_campaign::worlds::{Content, LEVELS, Worlds};
+    use wonderland_game::music::world_track;
+
+    let Some(dir) = assets_dir() else {
+        eprintln!("skipping: no RTWP assets");
+        return;
+    };
+    let data = GameData::open(&dir).unwrap();
+    if data.tow.is_none() {
+        eprintln!("skipping: no TOW assets");
+        return;
+    }
+    let worlds = Worlds::game();
+    let mut count = 0;
+    for level in (0..LEVELS as i32).filter(|&l| worlds.content(l) == Content::Tow) {
+        let Some(path) = worlds.level_path(level) else {
+            continue;
+        };
+        let loaded = data
+            .load_content_level(Content::Tow, &path)
+            .unwrap_or_else(|e| panic!("level {level}: {e}"));
+        assert!(!loaded.level.description.is_empty(), "{path}: no title");
+        let s = &loaded.setup;
+        let background = effective_background(s.background);
+        assert!(!construct_level(&s.grid, background).is_empty(), "{path}");
+        count += 1;
+    }
+    // 80 world levels, ten in the playground and the ending's stage.
+    assert_eq!(count, 80 + 10 + 1);
+    // TOW's worlds play modules RTWP ships too.
+    for w in 30..=40 {
+        assert!(data.assets.exists(world_track(w).file));
     }
 }

@@ -18,7 +18,11 @@
 //! the other languages; the player is saved either way.
 //!
 //! `--level` plays without the menus, through a [`Playlist`]: a won level
-//! goes on to the next in pack order, and nothing is recorded.
+//! goes on to the next in its pack's order (RTWP's, or TOW's for a level
+//! only TOW has), and nothing is recorded.
+//!
+//! TOW's playground levels (400 on) go back to the playground's selector
+//! instead, which puts the cursor on its first level again.
 //!
 //! Esc goes back to the level selector or the custom levels (or the main
 //! menu with no player), where the original opens its in-game menu (step
@@ -29,11 +33,12 @@
 
 use bevy::prelude::*;
 use wonderland_campaign::custom;
+use wonderland_campaign::worlds::Content;
 use wonderland_logic::{Completion, Event, Session};
 
 use crate::audio::MenuSounds;
 use crate::level::{GameData, LevelData};
-use crate::menu::{CUSTOM_LEVELS, LEVEL_SELECT, MAIN, Menu, MenuSound};
+use crate::menu::{CUSTOM_LEVELS, MAIN, Menu, MenuSound};
 use crate::menu_scene::MenuState;
 use crate::objects::clear_pools;
 use crate::scene::{LevelEntity, spawn_level};
@@ -50,15 +55,18 @@ pub enum Phase {
 /// `--level`'s levels to play in order, and which is being played.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct Playlist {
+    /// The pack's game.
+    pub content: Content,
     pub names: Vec<String>,
     pub index: usize,
 }
 
 impl Playlist {
-    /// The pack's levels, starting at `name`.
-    pub fn from_pack(data: &GameData, name: &str) -> Self {
-        let names = data.level_names();
+    /// `content`'s pack's levels, starting at `name`.
+    pub fn from_pack(data: &GameData, content: Content, name: &str) -> Self {
+        let names = data.level_names(content);
         Self {
+            content,
             index: names.iter().position(|n| n == name).unwrap_or(0),
             names,
         }
@@ -106,16 +114,17 @@ impl Plugin for FlowPlugin {
     }
 }
 
-/// Loads the level at `path` and starts it: the resources [`Phase::Game`]
-/// plays.
+/// Loads the level at `path` in `content`'s folder and starts it: the
+/// resources [`Phase::Game`] plays.
 pub fn begin(
     data: &GameData,
+    content: Content,
     path: &str,
     session: Session,
     now_ms: i64,
     record: Option<i32>,
 ) -> Result<(LevelData, Sim), String> {
-    let level = data.load_level(path)?;
+    let level = data.load_content_level(content, path)?;
     let sim = start(data, &level, session, now_ms, record)?;
     Ok((level, sim))
 }
@@ -207,24 +216,26 @@ fn finish_level(
             rebuild(&mut commands, &entities);
         }
         Completion::Done if state.is_some() => {
-            // `CurrentLevel=CurrentLevel+1`, `StartMenu(4)`, or
-            // `StartMenu(14)` after a custom level.
+            // `CurrentLevel=CurrentLevel+1`, `StartMenu(4)` (TOW's
+            // `StartMenu(8)` in the playground), or `StartMenu(14)` after
+            // a custom level.
             if let Some(state) = &mut state {
                 let menu = &mut state.menu;
                 if menu.level == custom::LEVEL {
                     menu.start(CUSTOM_LEVELS);
                 } else {
                     menu.level += 1;
-                    menu.start(LEVEL_SELECT);
+                    menu.start(menu.selector_menu());
                 }
             }
             next.set(Phase::Menu);
         }
         Completion::Done => {
+            let content = playlist.as_ref().map_or(Content::Rtwp, |p| p.content);
             let next = playlist
                 .and_then(|mut p| p.advance().map(str::to_owned))
                 .unwrap_or_else(|| level.name.clone());
-            let new_level = match data.load_level(&next) {
+            let new_level = match data.load_content_level(content, &next) {
                 Ok(l) => l,
                 Err(e) => {
                     error!("{e}");
@@ -263,7 +274,7 @@ fn to_menu(
             menu.start(if menu.level == custom::LEVEL {
                 CUSTOM_LEVELS
             } else {
-                LEVEL_SELECT
+                menu.selector_menu()
             });
         } else {
             menu.start(MAIN);
@@ -279,12 +290,14 @@ mod tests {
     #[test]
     fn playlist_wraps() {
         let mut p = Playlist {
+            content: Content::Rtwp,
             names: vec!["a".into(), "b".into()],
             index: 1,
         };
         assert_eq!(p.advance(), Some("a"));
         assert_eq!(p.advance(), Some("b"));
         let mut empty = Playlist {
+            content: Content::Rtwp,
             names: vec![],
             index: 0,
         };

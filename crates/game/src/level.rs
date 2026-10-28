@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
+use wonderland_campaign::worlds::Content;
 use wonderland_formats::config::Options as ConfigOptions;
 use wonderland_formats::{Game, GameAssets, Level};
 use wonderland_logic::{Options, Ruleset, Setup};
@@ -11,6 +12,9 @@ use wonderland_logic::{Options, Ruleset, Setup};
 #[derive(Resource)]
 pub struct GameData {
     pub assets: GameAssets,
+    /// TOW's data folder beside RTWP's, for TOW's levels; `None` when
+    /// there is none.
+    pub tow: Option<GameAssets>,
     pub ruleset: Ruleset,
     pub options: Options,
     /// `OptionsTeleport`: 1 draws every teleporter with the generic texture.
@@ -33,8 +37,13 @@ impl GameData {
             .ok()
             .and_then(|d| ConfigOptions::parse(Game::Rtwp, &d).ok())
             .unwrap_or_else(|| ConfigOptions::defaults(Game::Rtwp));
+        let tow = ["TOW", "tow"]
+            .iter()
+            .filter_map(|n| dir.parent().map(|p| p.join(n)))
+            .find_map(|d| GameAssets::open(d).ok());
         let mut data = Self {
             assets,
+            tow,
             ruleset: Ruleset::rtwp(),
             options: Options::default(),
             teleport_option: 0,
@@ -68,21 +77,52 @@ impl GameData {
             .map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// The level files in the pack, as the pack names them.
-    pub fn level_names(&self) -> Vec<String> {
-        level_names(&self.assets)
+    /// The level files in `content`'s pack, as the pack names them.
+    pub fn level_names(&self, content: Content) -> Vec<String> {
+        match content {
+            Content::Rtwp => level_names(&self.assets),
+            Content::Tow => self.tow.as_ref().map(level_names).unwrap_or_default(),
+        }
     }
 
     /// Finds a level by file name, with or without its folder and
-    /// extension (`intro`, `intro.lev`, `levels\intro.lev`).
-    pub fn find_level(&self, name: &str) -> Option<String> {
+    /// extension (`intro`, `intro.lev`, `levels\intro.lev`): in RTWP's
+    /// pack, else in TOW's.
+    pub fn find_level(&self, name: &str) -> Option<(Content, String)> {
         let want = stem(name);
-        self.level_names().into_iter().find(|n| stem(n) == want)
+        [Content::Rtwp, Content::Tow].into_iter().find_map(|c| {
+            let found = self.level_names(c).into_iter().find(|n| stem(n) == want);
+            found.map(|n| (c, n))
+        })
     }
 
+    /// Loads one of RTWP's levels.
     pub fn load_level(&self, name: &str) -> Result<LevelData, String> {
-        let data = self.assets.read(name).map_err(|e| format!("{name}: {e}"))?;
-        let level = Level::parse(&data, Game::Rtwp).map_err(|e| format!("{name}: {e}"))?;
+        self.load_content_level(Content::Rtwp, name)
+    }
+
+    /// Reads a level file from `content`'s folder. TOW's bonus levels
+    /// came as a separate download, so a TOW level missing from
+    /// `levels\` is also looked for in the folder itself.
+    pub fn read_level(&self, content: Content, name: &str) -> Result<Vec<u8>, String> {
+        let assets = match content {
+            Content::Rtwp => &self.assets,
+            Content::Tow => self.tow.as_ref().ok_or("no TOW data folder")?,
+        };
+        let read = |n: &str| assets.read(n).map(|d| d.into_owned());
+        let file = name.rsplit('\\').next().unwrap_or(name);
+        match read(name) {
+            Err(_) if content == Content::Tow && file != name => read(file),
+            r => r,
+        }
+        .map_err(|e| format!("{name}: {e}"))
+    }
+
+    /// Loads a level from `content`'s folder, parsed as that game reads
+    /// it, then set up under RTWP's rules.
+    pub fn load_content_level(&self, content: Content, name: &str) -> Result<LevelData, String> {
+        let data = self.read_level(content, name)?;
+        let level = Level::parse(&data, content.game()).map_err(|e| format!("{name}: {e}"))?;
         let setup = Setup::load(&level, &self.ruleset, self.options.load)
             .map_err(|e| format!("{name}: {e}"))?;
         Ok(LevelData {

@@ -24,7 +24,9 @@ use std::f32::consts::FRAC_1_SQRT_2;
 
 use wonderland_campaign::custom::{self, CustomLevels, FileEntry};
 use wonderland_campaign::profile::{Entry, MAX_PLAYERS, Players, Profile};
-use wonderland_campaign::worlds::{self, LEVELS, Worlds, title_lines, total_score};
+use wonderland_campaign::worlds::{
+    self, LEVELS, PLAYGROUND_LEVEL, TOW_PACK, Worlds, title_lines, total_score,
+};
 use wonderland_formats::config::Options as ConfigOptions;
 
 use crate::hud::{Edge, Letter, display_text, pinned};
@@ -35,6 +37,8 @@ pub const PLAYER_SELECT: i32 = 2;
 pub const NEW_PLAYER: i32 = 3;
 pub const LEVEL_SELECT: i32 = 4;
 pub const DELETE_PLAYER: i32 = 6;
+/// TOW's playground level selector (TOW's menu 8).
+pub const PLAYGROUND: i32 = 8;
 pub const OPTIONS: i32 = 9;
 pub const EXIT: i32 = 10;
 pub const LEVEL_PACKS: i32 = 13;
@@ -476,6 +480,8 @@ pub struct Menu {
     lock_worlds: i32,
     /// The world table.
     pub worlds: Worlds,
+    /// TOW's data folder is there, so its levels can be played.
+    pub tow: bool,
     /// Each level's title as its file stores it (`#` between lines), by
     /// level number; empty when it could not be read.
     pub level_titles: Vec<String>,
@@ -536,7 +542,8 @@ impl Default for Menu {
             level_backup: 0,
             pack: 0,
             lock_worlds: 0,
-            worlds: Worlds::rtwp(),
+            worlds: Worlds::game(),
+            tow: true,
             level_titles: vec![String::new(); LEVELS],
             level_count: 0,
             level_names: vec![Default::default(); 13],
@@ -574,7 +581,7 @@ impl Menu {
     pub fn start(&mut self, menu: i32) {
         self.option = 0;
         self.logos = menu == TITLE || menu == MAIN;
-        if !matches!(menu, 4 | 5 | 12 | 16) {
+        if !matches!(menu, 4 | 5 | 8 | 12 | 16) {
             self.selector_shown = true;
         }
         if menu == TITLE {
@@ -609,6 +616,15 @@ impl Menu {
                 self.actions.push(Action::LevelMusic(self.world()));
             }
             self.make_squares();
+        } else if menu == PLAYGROUND {
+            // TOW's `StartMenu(8)`: the music starts on the way in, and
+            // the cursor is always on the first level.
+            if self.current != PLAYGROUND {
+                self.actions.push(Action::LevelMusic(PLAYGROUND_LEVEL / 10));
+            }
+            self.level_timer = 0;
+            self.level = PLAYGROUND_LEVEL;
+            self.make_playground_squares();
         } else if menu == LEVEL_PACKS {
             self.level_timer = 0;
             self.actions.push(Action::StopMusic);
@@ -681,6 +697,7 @@ impl Menu {
             PLAYER_SELECT => self.player_select(keys, ticks),
             NEW_PLAYER => self.new_player(keys, ticks),
             LEVEL_SELECT => self.level_select(keys, ticks),
+            PLAYGROUND => self.playground(keys, ticks),
             DELETE_PLAYER => self.delete_player(keys, ticks),
             OPTIONS => self.options(keys, ticks, options),
             EXIT => self.exit(keys, ticks),
@@ -1050,8 +1067,11 @@ impl Menu {
     /// pack scrolls up as `LevelTimer` counts frames to 50. Enter opens
     /// the pack's level selector in the world last played there, or the
     /// custom levels; Esc goes back to the main menu.
+    ///
+    /// TOW's levels and playground are two more lines before the custom
+    /// levels; without TOW's data folder they only say no.
     fn level_packs(&mut self, keys: MenuKeys, ticks: u32) {
-        const ABOUT: [[&str; 4]; 4] = [
+        const ABOUT: [[&str; 4]; 6] = [
             [
                 "A set of twenty tutorial levels:",
                 "Learn the ins and outs of basic gameplay",
@@ -1071,6 +1091,18 @@ impl Menu {
                 "Loof, and their new friends solve the mystery?",
             ],
             [
+                "Where it all began: Stinky and Loof's first",
+                "adventure, The Original Wonderland,",
+                "with ten worlds and eighty levels.",
+                "",
+            ],
+            [
+                "Levels for very young or less experienced",
+                "players: exploration, discovery and simple",
+                "puzzles. Also contains the five bonus",
+                "levels of The Original Wonderland.",
+            ],
+            [
                 "Hundreds of custom levels created by other",
                 "Return To Wonderland players.",
                 "Visit the online community and add more",
@@ -1083,7 +1115,9 @@ impl Menu {
         tx.center("Tutorial Levels", 7.0, 1.0, 52);
         tx.center("Classic Levels", 8.0, 1.0, 53);
         tx.center("Deluxe Levels", 9.0, 1.0, 54);
-        tx.center("Custom Levels", 10.0, 1.0, 56);
+        tx.center("Original Levels", 10.0, 1.0, 55);
+        tx.center("The Playground", 11.0, 1.0, 64);
+        tx.center("Custom Levels", 12.0, 1.0, 56);
         if self.level_timer < 50 {
             self.level_timer += 1;
         }
@@ -1110,7 +1144,7 @@ impl Menu {
                 self.sound();
                 self.option -= 1;
                 if self.option == -1 {
-                    self.option = 3;
+                    self.option = 5;
                 }
                 self.cursor_key = 1;
                 self.level_timer = 0;
@@ -1119,7 +1153,7 @@ impl Menu {
             if self.cursor_key == 0 {
                 self.sound();
                 self.option += 1;
-                if self.option == 4 {
+                if self.option == 6 {
                     self.option = 0;
                 }
                 self.cursor_key = 1;
@@ -1128,12 +1162,20 @@ impl Menu {
         } else if keys.enter {
             if self.cursor_key == 0 {
                 self.cursor_key = 1;
+                if matches!(self.option, 3 | 4) && !self.tow {
+                    self.actions.push(Action::Sound(MenuSound::No));
+                    return;
+                }
                 self.end();
-                if self.option < 3 {
-                    // The tutorials are pack 1 and the classic levels 0.
+                if self.option == 4 {
+                    self.start(PLAYGROUND);
+                } else if self.option < 4 {
+                    // The tutorials are pack 1 and the classic levels 0;
+                    // TOW's worlds are pack 3.
                     self.pack = match self.option {
                         0 => 1,
                         1 => 0,
+                        3 => TOW_PACK,
                         p => p,
                     };
                     let pack = self.pack as usize;
@@ -1522,7 +1564,7 @@ impl Menu {
             ..10 => ("CLASSIC LEVELS ", 0),
             10..20 => ("TUTORIAL LEVELS ", 10),
             20..30 => ("DELUXE LEVELS ", 20),
-            _ => ("KIDS LEVELS ", 30),
+            _ => ("ORIGINAL LEVELS ", 30),
         };
         tx.center("", 15.0, 1.0, 63);
         let number = world + 1 - adjust;
@@ -1667,9 +1709,9 @@ impl Menu {
                         self.end();
                         self.level = world * 10;
                         match world {
-                            // The endings (menus 12 and 16), and the end
-                            // of the tutorials.
-                            10 | 12 | 28 => self.start(MAIN),
+                            // The endings (menus 12 and 16, and TOW's
+                            // 12), and the end of the tutorials.
+                            10 | 12 | 28 | 40 => self.start(MAIN),
                             _ => {
                                 self.actions.push(Action::LevelMusic(world));
                                 self.start(LEVEL_SELECT);
@@ -1733,6 +1775,178 @@ impl Menu {
             }
         } else {
             self.cursor_key = 0;
+        }
+    }
+
+    /// TOW's `StartMenu(8)`: a square for each playground level, all in
+    /// the won quarter, with no gates and no scores.
+    fn make_playground_squares(&mut self) {
+        let world = PLAYGROUND_LEVEL / 10;
+        let n = self.worlds.level_count(world);
+        self.level_count = n;
+        self.squares.clear();
+        for i in 0..n {
+            let row = if n > 5 {
+                0.6 - (i / 5) as f32 * 0.35
+            } else {
+                0.425
+            };
+            self.squares.push(LevelSquare {
+                x: -0.8 + (i % 5) as f32 * 0.4,
+                y: row,
+                square: Square::Won,
+            });
+            // TOW reads translated titles from its own data, as RTWP
+            // does; here every language shows the file's title.
+            let lines = title_lines(&self.level_titles[(world * 10 + i) as usize]);
+            let k = lines.len() - 1;
+            let names = &mut self.level_names[i as usize];
+            for (j, line) in lines.into_iter().take(4).enumerate() {
+                names[j] = line;
+            }
+            if k < 2 {
+                names[2].clear();
+            }
+            if k < 1 {
+                names[1].clear();
+            }
+        }
+        self.cursor = Some(LevelCursor {
+            x: 0.0,
+            y: 0.0,
+            turn: 0.0,
+        });
+    }
+
+    /// TOW's `MenuLoop8`: the playground's level selector. Enter plays
+    /// the level under the cursor, the cursor keys move it within the
+    /// levels, and Esc goes back to the level packs (TOW's main menu).
+    fn playground(&mut self, keys: MenuKeys, ticks: u32) {
+        let world = PLAYGROUND_LEVEL / 10;
+        let n = self.level_count;
+        let lang = self.language;
+        let tx = &mut self.text;
+        let title = match lang {
+            1 => "BEGINNER LEVELS",
+            2 => "BIENVENUE AU TERRAIN DE JEU",
+            _ => "WELCOME TO THE PLAYGROUND",
+        };
+        tx.center(title, 2.0, 1.0, 50);
+        let at = self.level - world * 10;
+        if let Some(names) = usize::try_from(at)
+            .ok()
+            .and_then(|i| self.level_names.get(i))
+        {
+            for (i, line) in names.iter().take(3).enumerate() {
+                tx.center(line, 10.5 + i as f32, 1.0, 55 + i as i32);
+            }
+        }
+        let l = self.level;
+        let cursor = if n > 5 {
+            (
+                -0.8 + (l % 5) as f32 * 0.4,
+                0.6 - ((l % 10) / 5) as f32 * 0.35,
+            )
+        } else {
+            (-0.8 + (l % 5) as f32 * 0.4, 0.425)
+        };
+        tx.center(&format!("Level {}", l % 10 + 1), 9.5, 1.0, 54);
+        let (enter, cursor_keys, replay) = match lang {
+            1 => (
+                "'Enter' um dieses Level zu spielen.",
+                "Pfeiltasten um andere Levels auszuwaehlen.",
+                "",
+            ),
+            2 => (
+                "Tape 'Entree' pour essayer ce niveau.",
+                "Utilise les fleches pour choisir les niveaux.",
+                "",
+            ),
+            _ => (
+                "Press 'Enter' to try this Level.",
+                "Use Cursor Keys to select different Levels.",
+                "Levels can be replayed anytime.",
+            ),
+        };
+        tx.center(enter, 14.0, 1.0, 59);
+        // Both lines share a tag, so only the second stays.
+        tx.center(cursor_keys, 17.0, 1.0, 60);
+        tx.center(replay, 18.0, 1.0, 60);
+        if let Some(c) = &mut self.cursor {
+            (c.x, c.y) = cursor;
+        }
+        self.text.activate(|| None);
+
+        self.run_ticks(ticks, true);
+        if let Some(c) = &mut self.cursor {
+            c.turn = (c.turn + 3.0 * ticks as f32) % 360.0;
+        }
+
+        let first = world * 10;
+        if keys.enter {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                if at < n {
+                    self.free_squares();
+                    self.end();
+                    self.actions.push(Action::StartLevel(self.level));
+                }
+            }
+        } else if keys.left {
+            if self.cursor_key == 0 {
+                self.sound();
+                self.cursor_key = 1;
+                self.level -= 1;
+                if self.level < first {
+                    self.level = first + n - 1;
+                }
+            }
+        } else if keys.right {
+            if self.cursor_key == 0 {
+                self.sound();
+                self.cursor_key = 1;
+                self.level += 1;
+                if self.level >= first + n {
+                    self.level = first;
+                }
+            }
+        } else if keys.up {
+            if self.cursor_key == 0 && n > 5 {
+                self.sound();
+                self.cursor_key = 1;
+                self.level -= 5;
+                if self.level < first {
+                    self.level = first + n - 1;
+                }
+            }
+        } else if keys.down {
+            if self.cursor_key == 0 && n > 5 {
+                self.sound();
+                self.cursor_key = 1;
+                self.level += 5;
+                if self.level > first + n - 1 {
+                    self.level = first + n - 1;
+                }
+            }
+        } else if keys.escape {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                self.free_squares();
+                self.end();
+                self.start(LEVEL_PACKS);
+            }
+        } else {
+            self.cursor_key = 0;
+        }
+    }
+
+    /// The selector a level is chosen from: the playground's or the
+    /// world's.
+    pub fn selector_menu(&self) -> i32 {
+        if self.level >= PLAYGROUND_LEVEL {
+            PLAYGROUND
+        } else {
+            LEVEL_SELECT
         }
     }
 
@@ -2696,7 +2910,7 @@ mod tests {
 
         // Up wraps to the custom levels and starts the text again.
         press(&mut m, &mut o, UP);
-        assert_eq!((m.option, m.level_timer), (3, 1));
+        assert_eq!((m.option, m.level_timer), (5, 1));
         assert!(text(&m).contains("Hundreds of custom levels"));
         press(&mut m, &mut o, DOWN);
         // Enter plays no sound; the tutorials are world pack 1.
@@ -2720,6 +2934,122 @@ mod tests {
         let a = press(&mut m, &mut o, ESCAPE);
         assert_eq!(m.current, MAIN);
         assert!(a.contains(&Action::TitleMusic));
+    }
+
+    #[test]
+    fn tow_worlds_are_pack_three() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let mut m = Menu::new();
+        let mut p = Profile::new("ZED", 0);
+        p.world_packs = [3, 12, 25, 32];
+        p.record_win(320, 700, false);
+        m.profile = Some(p);
+        m.end();
+        m.start(LEVEL_PACKS);
+        m.frame(KEYS, 1, &mut o);
+        let t = text(&m);
+        assert!(t.contains("Original Levels"), "{t}");
+        assert!(t.contains("The Playground"), "{t}");
+        for _ in 0..3 {
+            press(&mut m, &mut o, DOWN);
+        }
+        assert!(text(&m).contains("Stinky and Loof's first"));
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::LevelMusic(32)));
+        assert_eq!(
+            (m.current, m.pack, m.world(), m.level),
+            (LEVEL_SELECT, TOW_PACK, 32, 320)
+        );
+        m.frame(KEYS, 1, &mut o);
+        let t = text(&m);
+        assert!(t.contains("ORIGINAL LEVELS WORLD 3"), "{t}");
+        assert!(t.contains("WINTER IN WONDERLAND"), "{t}");
+        assert!(t.contains("Score: 700"), "{t}");
+        // TOW's world names come in German too.
+        o.language = 1;
+        m.frame(KEYS, 1, &mut o);
+        assert!(text(&m).contains("WINTER IM WONDERLAND"));
+        o.language = 0;
+        // The first TOW world has no gate back.
+        m.set_world(30);
+        m.end();
+        m.start(LEVEL_SELECT);
+        assert_eq!(m.squares.len(), 6);
+        // Through the last world's gate: TOW's ending (the main menu for
+        // now).
+        m.profile.as_mut().unwrap().scores[300..400].fill(1);
+        m.set_world(39);
+        m.end();
+        m.start(LEVEL_SELECT);
+        m.level = 390 + m.level_count;
+        press(&mut m, &mut o, ENTER);
+        assert_eq!((m.current, m.world()), (MAIN, 40));
+
+        // Without TOW's folder the line only says no.
+        let mut m = Menu::new();
+        m.tow = false;
+        m.profile = Some(Profile::new("ZED", 0));
+        m.end();
+        m.start(LEVEL_PACKS);
+        for _ in 0..3 {
+            press(&mut m, &mut o, DOWN);
+        }
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::Sound(MenuSound::No)));
+        assert_eq!(m.current, LEVEL_PACKS);
+    }
+
+    #[test]
+    fn the_playground_has_ten_levels_and_no_gates() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let mut m = Menu::new();
+        m.profile = Some(Profile::new("ZED", 0));
+        for (l, t) in m.level_titles.iter_mut().enumerate() {
+            *t = format!("TITLE {l}");
+        }
+        m.end();
+        m.start(LEVEL_PACKS);
+        for _ in 0..4 {
+            press(&mut m, &mut o, DOWN);
+        }
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::LevelMusic(40)));
+        assert_eq!((m.current, m.level), (PLAYGROUND, PLAYGROUND_LEVEL));
+        assert!(m.selector.is_none());
+        m.frame(KEYS, 1, &mut o);
+        let t = text(&m);
+        assert!(t.contains("WELCOME TO THE PLAYGROUND"), "{t}");
+        assert!(t.contains("TITLE 400"), "{t}");
+        assert_eq!(m.squares.len(), 10);
+        assert!(m.squares.iter().all(|s| s.square == Square::Won));
+        // Left wraps to the last level, down stops at it.
+        press(&mut m, &mut o, LEFT);
+        assert_eq!(m.level, 409);
+        press(&mut m, &mut o, UP);
+        assert_eq!(m.level, 404);
+        press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, DOWN);
+        assert_eq!(m.level, 409);
+        press(&mut m, &mut o, RIGHT);
+        assert_eq!(m.level, 400);
+        press(&mut m, &mut o, RIGHT);
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::StartLevel(401)));
+        assert_eq!(m.selector_menu(), PLAYGROUND);
+        // Back after a win: the cursor starts on the first level again,
+        // and the music plays on.
+        m.level += 1;
+        let a = {
+            m.start(PLAYGROUND);
+            m.frame(KEYS, 1, &mut o)
+        };
+        assert!(!a.iter().any(|a| matches!(a, Action::LevelMusic(_))));
+        assert_eq!(m.level, PLAYGROUND_LEVEL);
+        // Esc: the level packs.
+        press(&mut m, &mut o, ESCAPE);
+        assert_eq!(m.current, LEVEL_PACKS);
+        // The player's world is left alone.
+        assert_eq!(m.world(), 0);
     }
 
     fn level_file(id: i32, title: &str) -> Vec<u8> {
