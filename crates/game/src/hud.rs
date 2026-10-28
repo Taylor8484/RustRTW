@@ -19,7 +19,7 @@ use crate::camera::GameCamera;
 use crate::flow::Phase;
 use crate::level::GameData;
 use crate::scene::TextureCache;
-use crate::shot::{HEADLESS_SIZE, headless};
+use crate::shot::{headless, headless_size};
 use crate::sim::{Sim, SimStep};
 use crate::style::TextureRef;
 
@@ -32,6 +32,27 @@ pub struct Letter {
     /// Row from the top.
     pub y: f32,
     pub alpha: f32,
+    /// Which part of a screen wider than 4:3 the column counts from:
+    /// the centred 4:3 grid, or the screen's left or right edge (for the
+    /// lines in the corners).
+    pub edge: Edge,
+}
+
+/// See [`Letter::edge`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Edge {
+    #[default]
+    Grid,
+    Left,
+    Right,
+}
+
+/// The letters moved to count from `edge`.
+pub fn pinned(mut letters: Vec<Letter>, edge: Edge) -> Vec<Letter> {
+    for l in &mut letters {
+        l.edge = edge;
+    }
+    letters
 }
 
 /// `DisplayText`: a line from column `x`.
@@ -43,6 +64,7 @@ pub fn display_text(text: &str, x: f32, y: f32, alpha: f32) -> Vec<Letter> {
             x: x + i as f32,
             y,
             alpha,
+            edge: Edge::Grid,
         })
         .collect()
 }
@@ -66,6 +88,7 @@ pub fn sign_layout(text: &str, y: f32, alpha: f32) -> Vec<Letter> {
                 x: start + i as f32,
                 y,
                 alpha,
+                edge: Edge::Grid,
             });
         }
     };
@@ -99,9 +122,15 @@ pub fn hud_letters(w: &World) -> Vec<Letter> {
     };
     if w.coins > 0 || blink_on {
         let taken = w.total_coins - w.coins;
-        out.extend(display_text(&format!("{coins_word}{taken}"), 0.0, 0.0, 1.0));
+        out.extend(pinned(
+            display_text(&format!("{coins_word}{taken}"), 0.0, 0.0, 1.0),
+            Edge::Left,
+        ));
         let x = if taken >= 10 { 9.0 } else { 8.0 };
-        out.extend(display_text(&format!("{of}{}", w.total_coins), x, 0.0, 1.0));
+        out.extend(pinned(
+            display_text(&format!("{of}{}", w.total_coins), x, 0.0, 1.0),
+            Edge::Left,
+        ));
     }
     if w.total_bonus_coins > 0 && (w.bonus_coins > 0 || blink_on) {
         let text = format!(
@@ -109,10 +138,13 @@ pub fn hud_letters(w: &World) -> Vec<Letter> {
             w.total_bonus_coins - w.bonus_coins,
             w.total_bonus_coins
         );
-        out.extend(display_text(&text, 0.0, 1.0, 1.0));
+        out.extend(pinned(display_text(&text, 0.0, 1.0, 1.0), Edge::Left));
     }
     let time = time_string(w.map_time);
-    out.extend(display_text(&time, 50.0 - time.len() as f32, 0.0, 1.0));
+    out.extend(pinned(
+        display_text(&time, 50.0 - time.len() as f32, 0.0, 1.0),
+        Edge::Right,
+    ));
     out
 }
 
@@ -238,15 +270,23 @@ fn draw_screen(
     mut drawn: ResMut<Drawn>,
     mut cache: ResMut<TextureCache>,
     mut images: ResMut<Assets<Image>>,
-    window: Query<&Window, With<PrimaryWindow>>,
+    window: Query<(), With<PrimaryWindow>>,
     root: Query<(Entity, Has<UiTargetCamera>), With<HudRoot>>,
-    camera: Query<Entity, With<GameCamera>>,
+    camera: Query<(Entity, &Camera), With<GameCamera>>,
     glyphs: Query<Entity, With<Glyph>>,
 ) {
-    let size = match window.single() {
-        Ok(w) => Vec2::new(w.width(), w.height()),
-        Err(_) if headless() => Vec2::new(HEADLESS_SIZE.0 as f32, HEADLESS_SIZE.1 as f32),
-        Err(_) => return,
+    // The UI is laid out in the camera's viewport (see `camera`).
+    let viewport = camera
+        .single()
+        .ok()
+        .and_then(|(_, c)| c.logical_viewport_size());
+    let size = match viewport {
+        Some(s) if window.single().is_ok() || headless() => s,
+        _ if headless() => {
+            let (w, h) = headless_size();
+            Vec2::new(w as f32, h as f32)
+        }
+        _ => return,
     };
     if *screen == drawn.screen && size == drawn.size {
         return;
@@ -256,7 +296,7 @@ fn draw_screen(
     };
     // The UI goes where the game camera draws, which is an image when
     // headless.
-    if !targeted && let Ok(cam) = camera.single() {
+    if !targeted && let Ok((cam, _)) = camera.single() {
         commands.entity(root).insert(UiTargetCamera(cam));
     }
     if drawn.fonts.is_empty() {
@@ -276,8 +316,11 @@ fn draw_screen(
     }
     // Columns are a fiftieth of the width; rows twice that, with row 0
     // where the top of a 4:3 picture would be.
-    let cell = size.x / 50.0;
-    let top = size.y / 2.0 - 0.375 * size.x;
+    // On a screen wider than 4:3 the grid stays in the centred 4:3 area.
+    let width = size.x.min(size.y * 4.0 / 3.0);
+    let left = (size.x - width) / 2.0;
+    let cell = width / 50.0;
+    let top = size.y / 2.0 - 0.375 * width;
     let pictures: Vec<(Handle<Image>, Option<Vec2>, &ScreenImage)> = screen
         .images
         .iter()
@@ -301,7 +344,7 @@ fn draw_screen(
                 image,
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(l * cell),
+                    left: Val::Px(left + l * cell),
                     top: Val::Px(top + t * cell * 2.0),
                     width: Val::Px((r - l) * cell),
                     height: Val::Px((b - t) * cell * 2.0),
@@ -326,7 +369,13 @@ fn draw_screen(
                 image,
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(l.x * cell),
+                    left: Val::Px(
+                        match l.edge {
+                            Edge::Grid => left,
+                            Edge::Left => 0.0,
+                            Edge::Right => 2.0 * left,
+                        } + l.x * cell,
+                    ),
                     top: Val::Px(top + l.y * cell * 2.0),
                     width: Val::Px(cell),
                     height: Val::Px(cell * 2.0),

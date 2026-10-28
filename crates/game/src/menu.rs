@@ -18,7 +18,7 @@ use std::f32::consts::FRAC_1_SQRT_2;
 
 use wonderland_formats::config::Options as ConfigOptions;
 
-use crate::hud::{Letter, display_text};
+use crate::hud::{Edge, Letter, display_text, pinned};
 
 pub const TITLE: i32 = 0;
 pub const MAIN: i32 = 1;
@@ -607,7 +607,10 @@ impl Menu {
     /// `MenuLoop1`: the main menu.
     fn main(&mut self, keys: MenuKeys, ticks: u32) {
         let version = format!("v{}.00", self.version_no1);
-        self.text.display(&version, 44.0, 0.0, 1.0, 50);
+        self.text.set(
+            50,
+            pinned(display_text(&version, 44.0, 0.0, 1.0), Edge::Right),
+        );
         let (items, hint) = match self.language {
             1 => (
                 [

@@ -2,7 +2,8 @@
 //! `WL_SCREENSHOT=out.png[,frames]` saves the window after `frames` frames
 //! (default 300) and quits. With `WL_HEADLESS=1` as well there is no window:
 //! the camera draws into a 1024x768 image (see `main.rs`), for machines
-//! that cannot present one (WSLg, CI).
+//! that cannot present one (WSLg, CI); `WL_HEADLESS_SIZE=<w>x<h>` picks
+//! another size.
 
 use std::path::PathBuf;
 
@@ -12,8 +13,17 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 
-/// The headless render target's size.
-pub const HEADLESS_SIZE: (u32, u32) = (1024, 768);
+/// The headless render target's size: `WL_HEADLESS_SIZE`, else 1024x768.
+pub fn headless_size() -> (u32, u32) {
+    std::env::var("WL_HEADLESS_SIZE")
+        .ok()
+        .and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+        })
+        .filter(|&(w, h)| w > 0 && h > 0)
+        .unwrap_or((1024, 768))
+}
 
 /// Whether `WL_HEADLESS` asks for rendering without a window.
 pub fn headless() -> bool {
@@ -62,7 +72,7 @@ impl Plugin for ShotPlugin {
 }
 
 fn make_target(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let (w, h) = HEADLESS_SIZE;
+    let (w, h) = headless_size();
     let image = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
     commands.insert_resource(HeadlessTarget(images.add(image)));
 }

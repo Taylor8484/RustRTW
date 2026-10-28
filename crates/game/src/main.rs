@@ -1,12 +1,13 @@
 //! `wonderland [--assets <dir>] [--level <name>] [--windowed]
-//! [--backend <name>]`
+//! [--pillarbox] [--backend <name>]`
 //!
 //! Starts Return to Wonderland Platinum at its title screen, or with
 //! `--level` straight in that level, going on through the pack's levels
 //! as each is won. The game data is read from `<dir>/RTWP` (default:
 //! `$WL_ASSETS`, else `assets`). The window takes its size and full
 //! screen setting from `options.cfg` as the original does; `--windowed`
-//! keeps it in a window.
+//! keeps it in a window. Wide screens show more at the sides;
+//! `--pillarbox` keeps the original's 4:3 picture with black bars.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -21,6 +22,7 @@ use bevy::window::ExitCondition;
 use bevy::window::WindowMode;
 use bevy::winit::WinitPlugin;
 use wonderland_game::GamePlugins;
+use wonderland_game::camera::Pillarbox;
 use wonderland_game::flow::{Phase, begin};
 use wonderland_game::level::{GameData, default_assets_dir};
 use wonderland_game::menu::GFX_MODES;
@@ -31,10 +33,11 @@ struct Args {
     assets: PathBuf,
     level: Option<String>,
     windowed: bool,
+    pillarbox: bool,
     backends: Option<Backends>,
 }
 
-const USAGE: &str = "usage: wonderland [--assets <dir>] [--level <name>] [--windowed] \
+const USAGE: &str = "usage: wonderland [--assets <dir>] [--level <name>] [--windowed] [--pillarbox] \
                      [--backend dx12|vulkan|gl]";
 
 fn parse_args() -> Result<Args, String> {
@@ -42,6 +45,7 @@ fn parse_args() -> Result<Args, String> {
         assets: default_assets_dir(),
         level: None,
         windowed: false,
+        pillarbox: false,
         backends: None,
     };
     let mut it = std::env::args().skip(1);
@@ -54,6 +58,7 @@ fn parse_args() -> Result<Args, String> {
             "--assets" => args.assets = PathBuf::from(value()?).join("RTWP"),
             "--level" => args.level = Some(value()?),
             "--windowed" => args.windowed = true,
+            "--pillarbox" => args.pillarbox = true,
             "--backend" => {
                 let v = value()?;
                 args.backends = Some(Backends::from_comma_list(&v));
@@ -161,6 +166,9 @@ fn main() -> ExitCode {
             .insert_resource(sim)
             .insert_resource(playlist)
             .insert_state(Phase::Game);
+    }
+    if args.pillarbox {
+        app.insert_resource(Pillarbox);
     }
     app.insert_resource(data).add_plugins(GamePlugins).run();
     ExitCode::SUCCESS

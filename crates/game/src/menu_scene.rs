@@ -23,13 +23,12 @@ use bevy::math::Affine2;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 use wonderland_logic::world::Lights;
 use wonderland_logic::{Clock, Session};
 
 use crate::audio::MenuSounds;
-use crate::camera::{FAR, GameCamera};
-use crate::coords::{rotation, triangle, vec, vertical_fov};
+use crate::camera::{FAR, GameCamera, fov, view_aspect};
+use crate::coords::{rotation, triangle, vec};
 use crate::flow::{Phase, begin};
 use crate::hud::{Screen, ScreenFilled, ScreenImage, camera_rect};
 use crate::level::GameData;
@@ -39,7 +38,6 @@ use crate::model::{Geometry, cylinder_segments, flip, sphere_segments};
 use crate::objects::vertex_colour;
 use crate::particles::frame;
 use crate::scene::TextureCache;
-use crate::shot::HEADLESS_SIZE;
 use crate::sim::Sim;
 use crate::style::TextureRef;
 
@@ -290,18 +288,12 @@ fn open_url(url: &str) {
 
 /// `StartMenu`'s camera: at the origin looking along +z, `CameraZoom 2`,
 /// `CameraRange .98, 140`.
-fn menu_camera(
-    window: Query<&Window, With<PrimaryWindow>>,
-    mut camera: Query<(&mut Transform, &mut Projection), With<GameCamera>>,
-) {
-    let (hw, hh) = HEADLESS_SIZE;
-    let aspect = window
-        .single()
-        .map_or(hw as f32 / hh as f32, |w| w.width() / w.height().max(1.0));
-    for (mut t, mut p) in &mut camera {
+fn menu_camera(mut camera: Query<(&Camera, &mut Transform, &mut Projection), With<GameCamera>>) {
+    for (cam, mut t, mut p) in &mut camera {
+        let aspect = view_aspect(cam);
         *t = Transform::IDENTITY;
         if let Projection::Perspective(p) = &mut *p {
-            p.fov = vertical_fov(2.0, aspect);
+            p.fov = fov(2.0, aspect);
             p.near = 0.98;
             p.far = FAR;
         }

@@ -145,12 +145,19 @@ pinned and upgraded deliberately.
   ALSA headers (`libasound2-dev`). Textures are decoded with `image`
   (BMP/JPEG), not Bevy's loaders.
 - **Run:** `wonderland [--assets <dir>] [--level <name>] [--windowed]
-  [--backend dx12|vulkan|gl]` starts RTWP at its title screen, or with
+  [--pillarbox] [--backend dx12|vulkan|gl]` starts RTWP at its title screen, or with
   `--level` straight in that level, from `<dir>/RTWP`, where `<dir>`
   defaults to `$WL_ASSETS`, else `assets`. The window's size and full
   screen setting come from `options.cfg` (`MyGfxMode`, `MyWindowed`);
   full screen is borderless at the desktop's resolution, and
   `--windowed` keeps a window.
+- **Wide screens:** the original only ran 4:3 and 5:4 modes, and Blitz
+  keeps the horizontal view fixed. Wider than 4:3, the camera keeps a
+  4:3 screen's vertical view and shows more at the sides
+  (`camera::fov`). The text grid stays in the centred 4:3 area, except
+  the HUD's corner lines (coins, bonus, time) and the menu's version,
+  which count from the screen edges (`hud::Edge`). `--pillarbox` draws
+  only the centred 4:3 area instead, with black bars.
 - **Renderer:** DX12 on Windows with Vulkan as the fallback, and Vulkan on
   Linux with OpenGL as the fallback. Both are passed to wgpu, which takes
   the first that works. wgpu's OpenGL on Windows needs ANGLE, so it is
@@ -211,7 +218,8 @@ pinned and upgraded deliberately.
   Options are written back to `options.cfg` in the game folder.
 - **Checking without a display:** `WL_SCREENSHOT=out.png[,frames]` saves
   a frame and quits; with `WL_HEADLESS=1` there is no window and the
-  camera draws into a 1024x768 image. `WL_MENU=<ticks>[,<menu>]` starts
+  camera draws into a 1024x768 image (`WL_HEADLESS_SIZE=<w>x<h>` for
+  another size). `WL_MENU=<ticks>[,<menu>]` starts
   the menus with `MenuTimer` at `ticks` (and in menu `menu`). On the
   software renderer new materials take over 100 frames to compile, so
   use 150 frames or more. WSLg could not present a window
