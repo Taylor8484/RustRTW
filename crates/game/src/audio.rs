@@ -218,6 +218,7 @@ pub fn menu_sound_file(sound: MenuSound) -> (&'static str, bool) {
         MenuSound::Move => ("sound\\menumove.wav", true),
         MenuSound::Type => ("sound\\type.wav", true),
         MenuSound::LastCoin => ("sound\\lastcoin.wav", true),
+        MenuSound::No => ("sound\\stinkyno.wav", true),
         MenuSound::SecretSong => ("newsounds\\song1c.wav", false),
         MenuSound::Exit(n) => match n {
             3 => ("newsounds\\exit3.wav", true),

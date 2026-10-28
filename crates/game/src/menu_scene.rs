@@ -1,7 +1,7 @@
 //! Draws and runs [`menu`](crate::menu) in [`Phase::Menu`]: the 3D
 //! background `MenuSetup` builds for style 1, the camera, the logos and
-//! selector bar, and what the menus ask for (sounds, saving the options,
-//! starting a game, quitting).
+//! selector bar, the level selector's squares, and what the menus ask
+//! for (sounds, music, saving the options, starting a level, quitting).
 //!
 //! The background: a star-textured cylinder round the camera (`res30.dat`,
 //! not fogged), two scrolling water planes, mountains from the heightmap
@@ -14,7 +14,8 @@
 //!
 //! `WL_MENU=<ticks>[,<menu>]` starts with `MenuTimer` already at `ticks`
 //! (and in menu `menu`), for checking the later parts of the sunrise or
-//! another menu in a screenshot.
+//! another menu in a screenshot; `WL_PLAYER=<name>` loads that player
+//! first.
 
 use bevy::app::AppExit;
 use bevy::asset::RenderAssetUsages;
@@ -26,19 +27,22 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use wonderland_campaign::profile::Players;
+use wonderland_campaign::worlds::{LEVELS, Worlds};
+use wonderland_formats::Game;
+use wonderland_formats::level::Level;
 use wonderland_logic::world::Lights;
 use wonderland_logic::{Clock, Session};
 
 use crate::audio::MenuSounds;
 use crate::camera::{FAR, GameCamera, fov, view_aspect};
 use crate::coords::{rotation, triangle, vec};
-use crate::flow::{CurrentPlayer, Phase, begin};
+use crate::flow::{Phase, Playlist, begin, record};
 use crate::hud::{Screen, ScreenFilled, ScreenImage, camera_rect};
 use crate::level::GameData;
 use crate::lighting::factor;
-use crate::menu::{Action, Menu, MenuKeys, Selector, exit_sound};
+use crate::menu::{Action, LevelCursor, Menu, MenuKeys, Selector, Square, exit_sound};
 use crate::model::{Geometry, cylinder_segments, flip, sphere_segments};
-use crate::music::MusicRequest;
+use crate::music::{MusicRequest, world_track};
 use crate::objects::vertex_colour;
 use crate::particles::frame;
 use crate::scene::TextureCache;
@@ -104,6 +108,21 @@ fn now_ms(time: &Time<Real>) -> i64 {
 fn setup_menu(mut commands: Commands, data: Res<GameData>, time: Res<Time<Real>>) {
     let mut menu = Menu::new();
     menu.players = Some(Players::new(data.assets.dir()));
+    menu.level_titles = level_titles(&data, &menu.worlds);
+    // `WL_PLAYER=<name>`: that player's progress, for screenshots.
+    if let (Ok(name), Some(players)) = (std::env::var("WL_PLAYER"), &menu.players) {
+        let entry = (players.list().unwrap_or_default().into_iter())
+            .find(|e| e.file_stem.eq_ignore_ascii_case(&name));
+        match entry.map(|e| players.load(&e)) {
+            Some(Ok(p)) => {
+                menu.level = p.first_level();
+                menu.pack = (p.world / 10).clamp(0, 3);
+                menu.profile = Some(p);
+            }
+            Some(Err(e)) => warn!("{e}"),
+            None => warn!("no player {name}"),
+        }
+    }
     // `WL_MENU=<timer>[,<menu>]`, for screenshots.
     let spec = std::env::var("WL_MENU").unwrap_or_default();
     let mut spec = spec.split(',').map(|v| v.trim().parse::<i32>().ok());
@@ -125,12 +144,32 @@ fn setup_menu(mut commands: Commands, data: Res<GameData>, time: Res<Time<Real>>
     });
 }
 
+/// Each world level's title (`MapName$` in its file), by level number.
+fn level_titles(data: &GameData, worlds: &Worlds) -> Vec<String> {
+    (0..LEVELS as i32)
+        .map(|l| {
+            let path = worlds.level_path(l)?;
+            let bytes = data.assets.read(&path).ok()?;
+            match Level::parse(&bytes, Game::Rtwp) {
+                Ok(level) => Some(level.description),
+                Err(e) => {
+                    warn!("{path}: {e}");
+                    None
+                }
+            }
+        })
+        .map(Option::unwrap_or_default)
+        .collect()
+}
+
 /// The menu keys held now.
 fn read_keys(keys: &ButtonInput<KeyCode>) -> MenuKeys {
     let any = |k: &[KeyCode]| k.iter().any(|&k| keys.pressed(k));
     MenuKeys {
         up: any(&[KeyCode::ArrowUp, KeyCode::Numpad8]),
         down: any(&[KeyCode::ArrowDown, KeyCode::Numpad2]),
+        left: any(&[KeyCode::ArrowLeft, KeyCode::Numpad4]),
+        right: any(&[KeyCode::ArrowRight, KeyCode::Numpad6]),
         enter: any(&[KeyCode::Enter, KeyCode::NumpadEnter]),
         escape: keys.pressed(KeyCode::Escape),
         space: keys.pressed(KeyCode::Space),
@@ -141,9 +180,45 @@ fn read_keys(keys: &ButtonInput<KeyCode>) -> MenuKeys {
     }
 }
 
-/// The logos and the selector bar.
+/// The logos, the selector bar, and the level selector's squares and
+/// cursor.
 fn menu_images(menu: &Menu) -> Vec<ScreenImage> {
     let mut out = Vec::new();
+    // Masked and unlit (`EntityFX 1`).
+    let sign = |path: &str, rect, uv, turn| ScreenImage {
+        texture: TextureRef {
+            path: path.into(),
+            flags: 4,
+            rotation: 0,
+        },
+        rect,
+        uv,
+        colour: [1.0; 4],
+        turn,
+    };
+    for sq in &menu.squares {
+        let (file, uv) = match sq.square {
+            Square::NotWon => ("graphics\\levelsigns2.bmp", [0.0, 0.0, 0.5, 0.5]),
+            Square::Won => ("graphics\\levelsigns2.bmp", [0.5, 0.0, 1.0, 0.5]),
+            Square::Back => ("graphics\\levelsigns2.bmp", [0.0, 0.5, 0.5, 1.0]),
+            Square::Forward => ("graphics\\levelsigns2.bmp", [0.5, 0.5, 1.0, 1.0]),
+            Square::Perfect => ("graphics\\levelperfect.bmp", [0.0, 0.0, 1.0, 1.0]),
+        };
+        out.push(sign(
+            file,
+            camera_rect(sq.x, sq.y, 4.0, 0.15, 0.15),
+            uv,
+            0.0,
+        ));
+    }
+    if let Some(LevelCursor { x, y, turn }) = menu.cursor {
+        out.push(sign(
+            "graphics\\levelsigns2b.bmp",
+            camera_rect(x, y, 3.99, 0.16, 0.16),
+            [0.0, 0.0, 1.0, 1.0],
+            turn,
+        ));
+    }
     if let Some(Selector {
         x,
         y,
@@ -160,6 +235,7 @@ fn menu_images(menu: &Menu) -> Vec<ScreenImage> {
             rect: camera_rect(x, y, z, half_width, Selector::HALF_HEIGHT),
             uv: [0.0, 0.0, 1.0, 1.0],
             colour: [1.0, 1.0, 1.0, 0.6],
+            turn: 0.0,
         });
     }
     if menu.logos {
@@ -178,6 +254,7 @@ fn menu_images(menu: &Menu) -> Vec<ScreenImage> {
                 rect: camera_rect(x, 0.5, 3.0, 0.5, 0.5),
                 uv: [0.01, 0.01, 0.99, 0.99],
                 colour: [f[0], f[1], f[2], 0.85],
+                turn: 0.0,
             });
         }
     }
@@ -231,6 +308,7 @@ fn menu_frame(
         match a {
             Action::Sound(s) => sounds.0.push(s),
             Action::TitleMusic => music.0 = Some(Some(crate::music::TITLE)),
+            Action::LevelMusic(world) => music.0 = Some(Some(world_track(world))),
             Action::StopMusic => music.0 = Some(None),
             // `TweenTime=MilliSecs()-TweenPeriod`.
             Action::Entered(_) => st.clock = Clock::new(&data.ruleset, now),
@@ -241,34 +319,24 @@ fn menu_frame(
                     warn!("cannot save the options: {e}");
                 }
             }
-            Action::StartGame => {
-                let player = st.menu.profile.take().map(|profile| CurrentPlayer {
-                    profile,
-                    players: st.menu.players.clone(),
-                });
+            Action::StartLevel(level) => {
                 let session = sim
                     .as_ref()
                     .map_or_else(Session::default, |s| s.world.session.clone());
-                let first = data
-                    .find_level("intro")
-                    .or_else(|| data.level_names().into_iter().next());
-                match first
-                    .ok_or_else(|| "no levels in the pack".to_owned())
-                    .and_then(|n| begin(&data, &n, session, now, player.as_ref()))
+                let record = record(&st.menu);
+                match (st.menu.worlds.level_path(level))
+                    .ok_or_else(|| format!("no level {level}"))
+                    .and_then(|path| begin(&data, &path, session, now, record))
                 {
-                    Ok((level, sim, playlist)) => {
+                    Ok((level, sim)) => {
                         commands.insert_resource(level);
                         commands.insert_resource(sim);
-                        commands.insert_resource(playlist);
-                        match player {
-                            Some(p) => commands.insert_resource(p),
-                            None => commands.remove_resource::<CurrentPlayer>(),
-                        }
+                        commands.remove_resource::<Playlist>();
                         next.set(Phase::Game);
                     }
                     Err(e) => {
                         error!("{e}");
-                        st.menu.start(crate::menu::MAIN);
+                        st.menu.start(crate::menu::LEVEL_SELECT);
                     }
                 }
             }

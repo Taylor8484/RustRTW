@@ -3,10 +3,16 @@
 //!
 //! This module has no Bevy state, so it is tested headless; `menu_scene`
 //! draws it and carries out the [`Action`]s. Ported so far: the title (0),
-//! the main menu (1), player select (2), new player (3), "Confirm Player
-//! Deletion?" (6), options (9), "Exit to Windows?" (10) and "Go Online?"
-//! (15). Choosing or creating a player should open the level pack menu
-//! (13); until that is ported (step 4d) it starts the game.
+//! the main menu (1), player select (2), new player (3), the level
+//! selector (4), "Confirm Player Deletion?" (6), options (9), "Exit to
+//! Windows?" (10) and "Go Online?" (15).
+//!
+//! Stop-gaps until the menus they stand for are ported: choosing or
+//! creating a player should open the level pack menu (13, step 4d); for
+//! now it goes to the classic pack's level selector, as picking the
+//! classic levels there does. Esc on the level selector goes to the main
+//! menu, where 13 would come first. The endings (12 and 16, step 4f) go
+//! to the main menu.
 //!
 //! Each `MenuLoopN` is one frame: it lays out the text (the letters get
 //! their alpha when first shown), runs the frame's ticks of
@@ -18,6 +24,7 @@ use std::collections::VecDeque;
 use std::f32::consts::FRAC_1_SQRT_2;
 
 use wonderland_campaign::profile::{Entry, MAX_PLAYERS, Players, Profile};
+use wonderland_campaign::worlds::{self, LEVELS, Worlds, title_lines, total_score};
 use wonderland_formats::config::Options as ConfigOptions;
 
 use crate::hud::{Edge, Letter, display_text, pinned};
@@ -26,10 +33,13 @@ pub const TITLE: i32 = 0;
 pub const MAIN: i32 = 1;
 pub const PLAYER_SELECT: i32 = 2;
 pub const NEW_PLAYER: i32 = 3;
+pub const LEVEL_SELECT: i32 = 4;
 pub const DELETE_PLAYER: i32 = 6;
 pub const OPTIONS: i32 = 9;
 pub const EXIT: i32 = 10;
 pub const ONLINE: i32 = 15;
+/// The level pack menu, not ported yet (step 4d).
+const LEVEL_PACKS: i32 = 13;
 
 /// The keys the menus read, held this frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -38,6 +48,10 @@ pub struct MenuKeys {
     pub up: bool,
     /// Cursor down or keypad 2.
     pub down: bool,
+    /// Cursor left or keypad 4, and right or keypad 6 (the level
+    /// selector).
+    pub left: bool,
+    pub right: bool,
     /// Return or keypad Enter.
     pub enter: bool,
     pub escape: bool,
@@ -60,6 +74,9 @@ pub enum MenuSound {
     Type,
     /// `SFXLastCoin` (`sound\lastcoin.wav`), a new player created.
     LastCoin,
+    /// `SFXTalk(5)` (`sound\stinkyno.wav`), the level selector's gate is
+    /// closed.
+    No,
     /// `newsounds\song1c.wav` through `PlaySound`, at full volume.
     SecretSong,
     /// `newsounds\exitN.wav`, played as the game closes.
@@ -83,9 +100,11 @@ pub enum Action {
     Sound(MenuSound),
     /// `StartMenu` ran: restart the tick clock (`TweenTime`).
     Entered(i32),
-    /// Leave the menus and play [`Menu::profile`] (for now, the pack
-    /// from its first level).
-    StartGame,
+    /// `StartLevel(CurrentLevel)`: leave the menus and play level
+    /// [`Menu::level`] of the world table.
+    StartLevel(i32),
+    /// `StartLevelMusic` for world `CurrentWorld`.
+    LevelMusic(i32),
     /// A player file could not be read or written.
     Warn(String),
     /// An option changed; the game's settings follow it.
@@ -109,6 +128,46 @@ fn exit_url(version_no1: i32) -> Option<&'static str> {
         -998 => Some("http://www.midnightsynergy.com/returntowonderland/levelex"),
         -996 => Some("http://www.midnightsynergy.com"),
         _ => None,
+    }
+}
+
+/// The forward gate's three lines on the level selector, open or closed.
+fn gate_text(language: i32, open: bool) -> [&'static str; 3] {
+    match (language, open) {
+        (1, true) => ["Das Tor ist geoeffnet.", "'Enter' zum fortsetzen.", ""],
+        (2, true) => [
+            "La Grille est ouverte.",
+            "Tape 'Entree' pour continuer.",
+            "",
+        ],
+        (_, true) => ["The Gateway Is Open", "Press 'Enter' To Continue", ""],
+        (1, false) => [
+            "Das Tor ist geschlossen.",
+            "Beende erst alle Levels dieser Welt",
+            "um es zu oeffnen.",
+        ],
+        (2, false) => [
+            "La Grille est fermee.",
+            "Termine tous les niveaux de ce monde",
+            "pour ouvrir cette Grille.",
+        ],
+        (_, false) => [
+            "The Gateway is Closed",
+            "Complete all Levels in this World",
+            "in order to open this Gate",
+        ],
+    }
+}
+
+/// The back gate's first two lines on the level selector.
+fn back_text(language: i32) -> [&'static str; 2] {
+    match language {
+        1 => ["Das Tor ist geoeffnet.", "'Enter' zum umkehren."],
+        2 => [
+            "La Grille est ouverte.",
+            "Tape 'Entree' pour revenir en arriere.",
+        ],
+        _ => ["Gateway is Open", "Press 'Enter' to Travel Back"],
     }
 }
 
@@ -320,6 +379,42 @@ impl Background {
     }
 }
 
+/// What a square on the level selector shows: a part of
+/// `graphics\levelsigns2.bmp` (`WorldLevelTexture`), or
+/// `graphics\levelperfect.bmp` for a perfect level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Square {
+    /// A level not won yet, or the closed gate: the top left quarter.
+    NotWon,
+    /// The top right quarter.
+    Won,
+    /// The whole perfect-level picture.
+    Perfect,
+    /// The open gate forward: the bottom right quarter.
+    Forward,
+    /// The gate back: the bottom left quarter.
+    Back,
+}
+
+/// A square on the level selector (`CurrentWorldLevelEntity`): a flat
+/// square at depth 4 facing the camera, half a side 0.15, unlit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelSquare {
+    pub x: f32,
+    pub y: f32,
+    pub square: Square,
+}
+
+/// The level selector's cursor (`CurrentWorldLevelEntity(12)`,
+/// `graphics\levelsigns2b.bmp`): at depth 3.99, half a side 0.16, turned
+/// 3 degrees a tick in the screen's plane.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelCursor {
+    pub x: f32,
+    pub y: f32,
+    pub turn: f32,
+}
+
 /// Fresh presses from held keys: what each `MenuLoop` does with
 /// `CursorKeyPressed`.
 enum Press {
@@ -361,8 +456,27 @@ pub struct Menu {
     typed: VecDeque<u8>,
     /// `MilliSecs()`, for a new player's id.
     pub millisecs: i32,
-    /// The player chosen or created.
+    /// The player chosen or created. Its `world` is `CurrentWorld`.
     pub profile: Option<Profile>,
+    /// `CurrentLevel`.
+    pub level: i32,
+    /// `WhichWorldPack`.
+    pub pack: i32,
+    /// `LockWorlds` from the options: 1 opens every world's gate.
+    lock_worlds: i32,
+    /// The world table.
+    pub worlds: Worlds,
+    /// Each level's title as its file stores it (`#` between lines), by
+    /// level number; empty when it could not be read.
+    pub level_titles: Vec<String>,
+    /// `CurrentWorldLevelN`.
+    level_count: i32,
+    /// `CurrentWorldLevelName$`: three lines for each square. Kept from
+    /// one world to the next, as lines the selector does not set are.
+    level_names: Vec<[String; 4]>,
+    /// The level selector's squares and cursor, while it is shown.
+    pub squares: Vec<LevelSquare>,
+    pub cursor: Option<LevelCursor>,
     pub text: Text,
     /// `Logo1`, `Logo2` shown.
     pub logos: bool,
@@ -392,6 +506,15 @@ impl Default for Menu {
             typed: VecDeque::new(),
             millisecs: 0,
             profile: None,
+            level: 0,
+            pack: 0,
+            lock_worlds: 0,
+            worlds: Worlds::rtwp(),
+            level_titles: vec![String::new(); LEVELS],
+            level_count: 0,
+            level_names: vec![Default::default(); 13],
+            squares: Vec::new(),
+            cursor: None,
             text: Text::default(),
             logos: false,
             selector: None,
@@ -444,6 +567,13 @@ impl Menu {
             // `GetKey`'s queue holds every key typed since the game
             // started; only what is typed on this screen counts here.
             self.typed.clear();
+        } else if menu == LEVEL_SELECT {
+            // Coming from the level pack menu, which player select and
+            // new player stand in for until it is ported.
+            if matches!(self.current, LEVEL_PACKS | PLAYER_SELECT | NEW_PLAYER) {
+                self.actions.push(Action::LevelMusic(self.world()));
+            }
+            self.make_squares();
         }
         self.current = menu;
         self.update_selector();
@@ -501,11 +631,13 @@ impl Menu {
         options: &mut ConfigOptions,
     ) -> Vec<Action> {
         self.language = options.language;
+        self.lock_worlds = options.lock_worlds;
         match self.current {
             TITLE => self.title(keys, ticks),
             MAIN => self.main(keys, ticks),
             PLAYER_SELECT => self.player_select(keys, ticks),
             NEW_PLAYER => self.new_player(keys, ticks),
+            LEVEL_SELECT => self.level_select(keys, ticks),
             DELETE_PLAYER => self.delete_player(keys, ticks),
             OPTIONS => self.options(keys, ticks, options),
             EXIT => self.exit(keys, ticks),
@@ -870,9 +1002,358 @@ impl Menu {
     }
 
     /// `StartMenu(13)`, the level pack menu, which comes with step 4d;
-    /// until then the chosen player goes straight into the game.
+    /// until then it is as if the classic levels were picked there.
     fn play(&mut self) {
-        self.actions.push(Action::StartGame);
+        self.pack = 0;
+        if let Some(p) = &mut self.profile {
+            p.world = p.world_packs[0];
+        }
+        self.level = self.world() * 10;
+        self.start(LEVEL_SELECT);
+    }
+
+    /// `CurrentWorld`.
+    pub fn world(&self) -> i32 {
+        self.profile.as_ref().map_or(0, |p| p.world)
+    }
+
+    fn set_world(&mut self, world: i32) {
+        if let Some(p) = &mut self.profile {
+            p.world = world;
+        }
+    }
+
+    fn scores(&self) -> &[i32] {
+        self.profile.as_ref().map_or(&[], |p| &p.scores)
+    }
+
+    fn perfect(&self, level: i32) -> i32 {
+        let p = self.profile.as_ref().map_or(&[][..], |p| &p.perfect);
+        worlds::score(p, level)
+    }
+
+    /// The gate forward is open (`NextWorldFlag=0`, or all worlds
+    /// unlocked).
+    fn gate_open(&self) -> bool {
+        self.worlds
+            .gate_open(self.scores(), self.pack, self.world(), self.lock_worlds)
+    }
+
+    /// `StartMenu(4)`: a square for each level of the world, the gate
+    /// forward, and the gate back in all but a pack's first world, with
+    /// the text for each.
+    fn make_squares(&mut self) {
+        let world = self.world();
+        let n = self.worlds.level_count(world);
+        self.level_count = n;
+        let open = self.gate_open();
+        let lang = self.language;
+        let back = i32::from(world % 10 != 0);
+        self.squares.clear();
+        for i in 0..=n + back {
+            let level = world * 10 + i;
+            let won = worlds::score(self.scores(), level) > 0;
+            let square = if i == n {
+                if open {
+                    self.set_names(i, gate_text(lang, true));
+                    Square::Forward
+                } else {
+                    self.set_names(i, gate_text(lang, false));
+                    Square::NotWon
+                }
+            } else if i == n + 1 {
+                // These set line 3, which is never shown, and leave line
+                // 2 as it was.
+                let [a, b] = back_text(lang);
+                let names = &mut self.level_names[i as usize];
+                names[0] = a.to_owned();
+                names[1] = b.to_owned();
+                names[3] = String::new();
+                Square::Back
+            } else if !won {
+                Square::NotWon
+            } else if self.perfect(level) == 0 {
+                Square::Won
+            } else {
+                Square::Perfect
+            };
+            let (x, y) = if i < n {
+                let row = if n > 5 {
+                    0.6 - (i / 5) as f32 * 0.35
+                } else {
+                    0.425
+                };
+                (-0.8 + (i % 5) as f32 * 0.4, row)
+            } else if i == n + 1 {
+                (-1.3, 0.425)
+            } else {
+                (1.3, 0.425)
+            };
+            self.squares.push(LevelSquare { x, y, square });
+            if i < n {
+                // The original reads the German and French titles from
+                // data that is not there and stops with "Out of data";
+                // here every language shows the level's own title.
+                let lines = title_lines(&self.level_titles[level as usize]);
+                let k = lines.len() - 1;
+                let names = &mut self.level_names[i as usize];
+                for (j, line) in lines.into_iter().take(4).enumerate() {
+                    names[j] = line;
+                }
+                if k < 2 {
+                    names[2].clear();
+                }
+                if k < 1 {
+                    names[1].clear();
+                }
+            }
+        }
+        self.cursor = Some(LevelCursor {
+            x: 0.0,
+            y: 0.0,
+            turn: 0.0,
+        });
+    }
+
+    fn set_names(&mut self, i: i32, lines: [&str; 3]) {
+        let names = &mut self.level_names[i as usize];
+        for (n, l) in names.iter_mut().zip(lines) {
+            *n = l.to_owned();
+        }
+    }
+
+    /// Frees the squares and cursor.
+    fn free_squares(&mut self) {
+        self.squares.clear();
+        self.cursor = None;
+    }
+
+    /// `MenuLoop4`: the level selector. Enter plays the level under the
+    /// cursor or goes through a gate; the cursor keys move the cursor.
+    fn level_select(&mut self, keys: MenuKeys, ticks: u32) {
+        let world = self.world();
+        let n = self.level_count;
+        let lang = self.language;
+        let name = self.profile.as_ref().map_or("", |p| p.name.as_str());
+        let tx = &mut self.text;
+        tx.display(name, 0.0, 0.0, 1.0, 61);
+        let (group, adjust) = match world {
+            ..10 => ("CLASSIC LEVELS ", 0),
+            10..20 => ("TUTORIAL LEVELS ", 10),
+            20..30 => ("DELUXE LEVELS ", 20),
+            _ => ("KIDS LEVELS ", 30),
+        };
+        tx.center("", 15.0, 1.0, 63);
+        let number = world + 1 - adjust;
+        match lang {
+            1 => tx.center(&format!("WELT  {number}"), 2.0, 1.0, 50),
+            2 => tx.center(&format!("MONDE  {number}"), 2.0, 1.0, 50),
+            _ => tx.center(&format!("{group}WORLD {number}"), 2.0, 1.0, 50),
+        }
+        tx.center(self.worlds.name(world, lang), 3.0, 1.0, 51);
+        let scores = self.profile.as_ref().map_or(&[][..], |p| &p.scores);
+        let total = total_score(scores, adjust).to_string();
+        let label = match lang {
+            1 => "     PUNKTE:",
+            2 => "SCORE TOTAL:",
+            _ => "TOTAL SCORE:",
+        };
+        tx.display(label, 38.0, 0.0, 1.0, 52);
+        tx.display(&total, (50 - total.len() as i32) as f32, 1.0, 1.0, 53);
+
+        let at = self.level - world * 10;
+        if let Some(names) = usize::try_from(at)
+            .ok()
+            .and_then(|i| self.level_names.get(i))
+        {
+            for (i, line) in names.iter().take(3).enumerate() {
+                tx.center(line, 10.5 + i as f32, 1.0, 55 + i as i32);
+            }
+        }
+        let blink = self.level_timer % 160 < 120;
+        let cursor;
+        if at < n {
+            let l = self.level;
+            cursor = if n > 5 {
+                (
+                    -0.8 + (l % 5) as f32 * 0.4,
+                    0.6 - ((l % 10) / 5) as f32 * 0.35,
+                )
+            } else {
+                (-0.8 + (l % 5) as f32 * 0.4, 0.425)
+            };
+            tx.center(&format!("Level {}", l % 10 + 1), 9.5, 1.0, 54);
+            let score = worlds::score(scores, l);
+            if score == 0 {
+                if blink {
+                    let (a, b) = match lang {
+                        1 => ("Noch nicht komplett.", "'Enter' um das Level zu starten."),
+                        2 => (
+                            "Pas encore complete.",
+                            "Tape 'Entree' pour essayer ce niveau.",
+                        ),
+                        _ => ("Not Completed Yet", "Press 'Enter' to try this Level."),
+                    };
+                    tx.center(a, 13.0, 1.0, 58);
+                    tx.center(b, 14.0, 1.0, 59);
+                } else {
+                    tx.display("", 0.0, 0.0, 1.0, 58);
+                    tx.display("", 0.0, 0.0, 1.0, 59);
+                }
+                let (hint, x) = match lang {
+                    1 => ("Benutze die Pfeiltasten zur Levelauswahl.", 5.0),
+                    2 => ("Utilise les fleches pour choisir les niveaux.", 3.0),
+                    _ => ("Use Cursor Keys to select different Levels.", 4.0),
+                };
+                tx.display(hint, x, 18.0, 1.0, 60);
+            } else {
+                let (done, word, hint, x) = match lang {
+                    1 => (
+                        "Beendet!",
+                        "Punkte: ",
+                        "Levels koennen jederzeit nochmal gespielt werden.",
+                        0.5,
+                    ),
+                    2 => (
+                        "Reussi!",
+                        "Score: ",
+                        "      Rejoue les niveaux n'importe quand.      ",
+                        1.0,
+                    ),
+                    _ => (
+                        "Completed!",
+                        "Score: ",
+                        "Replay Levels to try and beat your score anytime.",
+                        0.5,
+                    ),
+                };
+                tx.center(done, 13.0, 1.0, 58);
+                tx.center(&format!("{word}{score}"), 14.0, 1.0, 59);
+                if blink {
+                    tx.display(hint, x, 18.0, 1.0, 60);
+                } else {
+                    tx.display("", 0.0, 0.0, 1.0, 60);
+                }
+                let perfect = self.profile.as_ref().map_or(&[][..], |p| &p.perfect);
+                if lang == 0 && worlds::score(perfect, l) == 1 {
+                    tx.center("All Bonus Coins Found!", 15.0, 1.0, 63);
+                }
+            }
+        } else {
+            let gate = if at == n {
+                cursor = (1.3, 0.425);
+                match lang {
+                    1 => "Zur naechsten Welt!",
+                    2 => "Monde suivant",
+                    _ => "Next World",
+                }
+            } else {
+                cursor = (-1.3, 0.425);
+                match lang {
+                    1 => "Zur vorherigen Welt!",
+                    2 => "Monde precedant",
+                    _ => "Previous World",
+                }
+            };
+            tx.center(gate, 9.5, 1.0, 54);
+            for tag in 58..=60 {
+                tx.display("", 1.0, 1.0, 1.0, tag);
+            }
+        }
+        if let Some(c) = &mut self.cursor {
+            (c.x, c.y) = cursor;
+        }
+        self.text.activate(|| None);
+
+        self.run_ticks(ticks, true);
+        if let Some(c) = &mut self.cursor {
+            c.turn = (c.turn + 3.0 * ticks as f32) % 360.0;
+        }
+
+        let back = i32::from(world % 10 != 0);
+        if keys.enter {
+            if !self.latched {
+                self.latched = true;
+                if at < n {
+                    self.free_squares();
+                    self.end();
+                    self.actions.push(Action::StartLevel(self.level));
+                } else if at == n {
+                    if self.gate_open() {
+                        self.free_squares();
+                        let world = world + 1;
+                        self.set_world(world);
+                        self.end();
+                        self.level = world * 10;
+                        match world {
+                            // The endings (menus 12 and 16), and the end
+                            // of the tutorials.
+                            10 | 12 | 28 => self.start(MAIN),
+                            _ => {
+                                self.actions.push(Action::LevelMusic(world));
+                                self.start(LEVEL_SELECT);
+                            }
+                        }
+                    } else {
+                        self.actions.push(Action::Sound(MenuSound::No));
+                    }
+                } else {
+                    self.free_squares();
+                    let world = world - 1;
+                    self.set_world(world);
+                    self.end();
+                    self.level = world * 10;
+                    self.actions.push(Action::LevelMusic(world));
+                    self.start(LEVEL_SELECT);
+                }
+            }
+        } else if keys.left {
+            if !self.latched {
+                self.sound();
+                self.latched = true;
+                self.level -= 1;
+                if self.level < world * 10 {
+                    self.level = world * 10 + n + back;
+                }
+            }
+        } else if keys.right {
+            if !self.latched {
+                self.sound();
+                self.latched = true;
+                self.level += 1;
+                if self.level >= world * 10 + n + 1 + back {
+                    self.level = world * 10;
+                }
+            }
+        } else if keys.up {
+            if !self.latched && n > 5 {
+                self.sound();
+                self.latched = true;
+                self.level -= 5;
+                if self.level < world * 10 {
+                    self.level = world * 10 + n - 1;
+                }
+            }
+        } else if keys.down {
+            if !self.latched && n > 5 {
+                self.sound();
+                self.latched = true;
+                self.level += 5;
+                if self.level > world * 10 + n - 1 {
+                    self.level = world * 10 + n - 1;
+                }
+            }
+        } else if keys.escape {
+            if !self.latched {
+                self.latched = true;
+                self.free_squares();
+                self.end();
+                // The level pack menu (13) comes first in the original.
+                self.start(MAIN);
+            }
+        } else {
+            self.latched = false;
+        }
     }
 
     /// `MenuLoop3`: typing a new player's name, up to 15 letters and
@@ -1386,6 +1867,8 @@ mod tests {
     const KEYS: MenuKeys = MenuKeys {
         up: false,
         down: false,
+        left: false,
+        right: false,
         enter: false,
         escape: false,
         space: false,
@@ -1613,7 +2096,9 @@ mod tests {
         type_name(&mut m, &mut o, "Ab");
         let a = press(&mut m, &mut o, ENTER);
         assert!(a.contains(&Action::Sound(MenuSound::LastCoin)));
-        assert!(a.contains(&Action::StartGame));
+        // The classic levels' selector, with the first world's music.
+        assert_eq!((m.current, m.level), (LEVEL_SELECT, 0));
+        assert!(a.contains(&Action::LevelMusic(0)));
         assert_eq!(m.profile.as_ref().unwrap().name, "AB");
         assert!(dir.join("players/ab.pla").is_file());
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1663,8 +2148,125 @@ mod tests {
         assert_eq!(m.current, PLAYER_SELECT);
         press(&mut m, &mut o, DOWN);
         let a = press(&mut m, &mut o, ENTER);
-        assert!(a.contains(&Action::StartGame));
+        assert_eq!(m.current, LEVEL_SELECT);
+        assert!(a.contains(&Action::LevelMusic(0)));
         assert_eq!(m.profile.as_ref().unwrap().record(4), Some(1234));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    const LEFT: MenuKeys = MenuKeys { left: true, ..KEYS };
+    const RIGHT: MenuKeys = MenuKeys {
+        right: true,
+        ..KEYS
+    };
+    const UP: MenuKeys = MenuKeys { up: true, ..KEYS };
+
+    /// The level selector for a new player in `world`.
+    fn selector(world: i32) -> Menu {
+        let mut m = Menu::new();
+        let mut p = Profile::new("ZED", 0);
+        p.world_packs[0] = world;
+        m.profile = Some(p);
+        for (l, t) in m.level_titles.iter_mut().enumerate() {
+            *t = format!("TITLE {l}#SECOND");
+        }
+        m.end();
+        m.start(PLAYER_SELECT);
+        m.end();
+        m.play();
+        m
+    }
+
+    #[test]
+    fn the_selector_shows_the_world_and_its_levels() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let mut m = selector(0);
+        m.profile.as_mut().unwrap().record_win(1, 500, true);
+        m.end();
+        m.start(LEVEL_SELECT);
+        m.frame(KEYS, 1, &mut o);
+        let t = text(&m);
+        assert!(t.contains("CLASSIC LEVELS WORLD 1"), "{t}");
+        assert!(t.contains("TOTAL SCORE:"), "{t}");
+        assert!(t.contains("TITLE 0SECOND"), "{t}");
+        assert!(t.contains("Not Completed Yet"), "{t}");
+        // Eight levels and the gate forward, but no gate back in world 0.
+        let kinds: Vec<Square> = m.squares.iter().map(|s| s.square).collect();
+        assert_eq!(kinds.len(), 9);
+        assert_eq!(kinds[0], Square::NotWon);
+        assert_eq!(kinds[1], Square::Perfect);
+        assert_eq!(kinds[8], Square::NotWon);
+        // More than five levels: two rows.
+        assert_eq!(m.squares[5].x, -0.8);
+        assert!((m.squares[5].y - 0.25).abs() < 1e-6);
+        assert_eq!(m.cursor.map(|c| (c.x, c.y)), Some((-0.8, 0.6)));
+
+        press(&mut m, &mut o, RIGHT);
+        let t = text(&m);
+        assert!(t.contains("Score: 500"), "{t}");
+        assert!(t.contains("All Bonus Coins Found!"), "{t}");
+        // Left from the first level wraps to the gate.
+        press(&mut m, &mut o, LEFT);
+        let a = press(&mut m, &mut o, LEFT);
+        assert!(a.contains(&Action::Sound(MenuSound::Move)));
+        assert_eq!(m.level, 8);
+        assert!(text(&m).contains("Next World"));
+        // The gate is closed: "no", and nothing else.
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::Sound(MenuSound::No)));
+        assert_eq!(m.current, LEVEL_SELECT);
+        // Up from the gate lands five levels back.
+        press(&mut m, &mut o, UP);
+        assert_eq!(m.level, 3);
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::StartLevel(3)));
+        assert!(m.squares.is_empty() && m.cursor.is_none());
+    }
+
+    #[test]
+    fn gates_move_between_worlds() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let mut m = selector(4);
+        m.frame(KEYS, 1, &mut o);
+        // Five levels: one row, and gates both ways.
+        assert_eq!(m.squares.len(), 7);
+        assert_eq!(m.squares[6].square, Square::Back);
+        assert_eq!(m.squares[0].y, 0.425);
+        // Down does nothing with five levels or fewer.
+        press(&mut m, &mut o, MenuKeys { down: true, ..KEYS });
+        assert_eq!(m.level, 40);
+        press(&mut m, &mut o, LEFT);
+        assert_eq!(m.level, 46);
+        assert!(text(&m).contains("Previous World"));
+        // Its line 2 is left from before: here, nothing yet.
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::LevelMusic(3)));
+        assert_eq!((m.current, m.world(), m.level), (LEVEL_SELECT, 3, 30));
+
+        // All worlds unlocked: the gate forward opens without a win.
+        o.lock_worlds = 1;
+        m.frame(KEYS, 1, &mut o);
+        m.end();
+        m.start(LEVEL_SELECT);
+        assert_eq!(m.squares[10].square, Square::Forward);
+        m.level = 40 - 10 + 10;
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::LevelMusic(4)));
+        assert_eq!(m.world(), 4);
+
+        // Through world 9's gate: the ending (the main menu for now).
+        let mut m = selector(9);
+        o.lock_worlds = 0;
+        m.profile.as_mut().unwrap().scores.fill(1);
+        m.end();
+        m.start(LEVEL_SELECT);
+        m.level = 100;
+        press(&mut m, &mut o, ENTER);
+        assert_eq!((m.current, m.world()), (MAIN, 10));
+
+        // Esc: the main menu, for now.
+        let mut m = selector(0);
+        press(&mut m, &mut o, ESCAPE);
+        assert_eq!(m.current, MAIN);
     }
 }

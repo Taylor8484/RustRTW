@@ -138,6 +138,14 @@ level packs, WSW's world map and story screens.
   same name, deletion to `.bak`, old-format files renamed `.old`).
   Loading reads like Blitz, zeros past the end, so a new player's short
   file loads with levels 1 to 3 marked perfect, as in the original.
+- `worlds` — RTWP's world table (`WorldLevelNames`), kept in
+  `data/rtwp.ron` and embedded in the build: world `w` holds levels
+  `w*10` to `w*10+9` (`CurrentLevel`, the index into the profile's
+  scores), in packs of ten worlds (classic, tutorial, deluxe, kids;
+  levels 400 on are the playground, whose files RTWP does not ship).
+  Also the level selector's rules: a world's level count, whether the
+  gate forward is open (every level of the pack so far won, or
+  `LockWorlds`), the pack's total score and a title's `#` line breaks.
 
 ### game
 
@@ -199,9 +207,9 @@ pinned and upgraded deliberately.
   file `LoadSounds` loads (custom voices first) with its pitch and
   volume. `music` mixes the Impulse Tracker modules with `xmrsplayer`
   and streams them as a looping Bevy audio source: the title music in
-  the menus, and in play the world's track (`StartLevelMusic`), started
-  when play moves into another world. Until the campaign the world comes
-  from a copy of `WorldLevelNames` in `music.rs`.
+  the menus, and the world's track (`StartLevelMusic`), which the level
+  selector starts when it is entered from the pack menu or changes
+  world, and which plays on through the world's levels.
 - **Plugins:** `SimPlugin` runs ticks from `logic::Clock` and keeps the
   frame's events; `ScenePlugin` builds the level (`level_mesh`, `style`,
   `texture`), lights it and scrolls the water and conveyor textures;
@@ -210,18 +218,25 @@ pinned and upgraded deliberately.
   draws `hud::Screen` in the game's bitmap font (UI image nodes on
   `DisplayText`'s 50-column grid): the coin/bonus/time line and the signs
   in play, the menu text, selector bar and logos in the menus;
-  `FlowPlugin` holds the `Phase` (`GamePhase`: menus or play) and the
-  `CurrentPlayer` (gives each level its record, keeps a won level's
-  score and saves the player), restarts a lost level, moves on from a won one through a `Playlist` (pack order
-  until the campaign) and goes back to the main menu on Esc;
+  `FlowPlugin` holds the `Phase` (`GamePhase`: menus or play), gives
+  each level the player's record, keeps a won level's score and saves
+  the player, restarts a lost level, goes back to the level selector
+  with the next level after a win, and to the selector on Esc (the
+  in-game menu is step 4f). `--level` play has no player and moves on
+  through a `Playlist` in pack order;
   `MenuScenePlugin` runs the menus and draws their background. The level
   plugins run only in `Phase::Game`.
 - **Menus:** `menu` is the menus' state and logic with no Bevy types
   (`StartMenu`, `EndMenu`, each `MenuLoopN` as one frame, the text by
   tag, `MenuBkgUpdate`), so it is unit tested; it returns `Action`s
   (sounds, start a game, save the options, quit) for `menu_scene` to
-  carry out. Player select, new player and delete player (menus 2, 3,
-  6) read and write the profiles through `campaign::profile`; the name
+  carry out. The player being played is the menus' `Menu::profile`, and
+  `CurrentLevel` is `Menu::level`. Player select, new player and delete
+  player (menus 2, 3, 6) read and write the profiles through
+  `campaign::profile`. The level selector (menu 4) draws its squares and
+  spinning cursor as screen images at their 3D depth, from
+  `levelsigns2.bmp`'s quarters and `levelperfect.bmp`; its level titles
+  are read from the level files once at start-up. The name
   is typed from the window's text input, one character a frame as
   `GetKey` returns them. Keys are read once per frame as held keys, with
   `CursorKeyPressed` turning a held key into one press, as in the
@@ -236,7 +251,8 @@ pinned and upgraded deliberately.
   a frame and quits; with `WL_HEADLESS=1` there is no window and the
   camera draws into a 1024x768 image (`WL_HEADLESS_SIZE=<w>x<h>` for
   another size). `WL_MENU=<ticks>[,<menu>]` starts
-  the menus with `MenuTimer` at `ticks` (and in menu `menu`). On the
+  the menus with `MenuTimer` at `ticks` (and in menu `menu`);
+  `WL_PLAYER=<name>` loads that player first (for menu 4). On the
   software renderer new materials take over 100 frames to compile, so
   use 150 frames or more. WSLg could not present a window
   here (Wayland dropped the connection, GL had no present mode).

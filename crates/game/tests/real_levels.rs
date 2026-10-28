@@ -72,11 +72,12 @@ fn every_rtwp_level_builds_its_scene() {
 }
 
 /// Every track the menus and worlds play decodes and is not silent, and
-/// every level the world table names is in the pack.
+/// every level the world packs name loads.
 #[test]
 fn the_music_plays_and_the_worlds_name_real_levels() {
     use bevy::audio::Decodable;
-    use wonderland_game::music::{TITLE, Tune, world_levels, world_track};
+    use wonderland_campaign::worlds::{PLAYGROUND_LEVEL, Worlds};
+    use wonderland_game::music::{TITLE, Tune, world_track};
 
     let Some(dir) = assets_dir() else {
         eprintln!("skipping: no RTWP assets");
@@ -95,7 +96,12 @@ fn the_music_plays_and_the_worlds_name_real_levels() {
         assert!(loud > 1000, "{file}: silent");
     }
     // World 9 opens with `res10.dat`, a level kept under a resource name.
-    for name in world_levels().filter(|n| *n != "res10") {
-        assert!(data.find_level(name).is_some(), "{name} is not in the pack");
+    // The playground's files (levels 400 on) do not ship, and no world
+    // pack reaches them.
+    let worlds = Worlds::rtwp();
+    for level in (0..PLAYGROUND_LEVEL).filter(|&l| worlds.level_file(l).is_some()) {
+        let path = worlds.level_path(level).unwrap();
+        let loaded = data.load_level(&path).map(|l| l.level.description);
+        assert!(loaded.is_ok(), "level {level}: {loaded:?}");
     }
 }

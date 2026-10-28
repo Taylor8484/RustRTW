@@ -188,6 +188,8 @@ pub struct ScreenImage {
     pub uv: [f32; 4],
     /// sRGB colour and alpha it is multiplied by.
     pub colour: [f32; 4],
+    /// Turned counter-clockwise about its centre, in degrees.
+    pub turn: f32,
 }
 
 /// Where a rectangle in front of a zoom-2 camera lands on the letter grid:
@@ -350,6 +352,7 @@ fn draw_screen(
                     height: Val::Px((b - t) * cell * 2.0),
                     ..default()
                 },
+                UiTransform::from_rotation(Rot2::degrees(-i.turn)),
                 Glyph,
             ));
         }

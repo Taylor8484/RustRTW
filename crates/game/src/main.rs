@@ -3,7 +3,7 @@
 //!
 //! Starts Return to Wonderland Platinum at its title screen, or with
 //! `--level` straight in that level, going on through the pack's levels
-//! as each is won. The game data is read from `<dir>/RTWP` (default:
+//! as each is won, with no player and the music of the level's world. The game data is read from `<dir>/RTWP` (default:
 //! `$WL_ASSETS`, else `assets`). The window takes its size and full
 //! screen setting from `options.cfg` as the original does; `--windowed`
 //! keeps it in a window. Wide screens show more at the sides;
@@ -21,11 +21,13 @@ use bevy::render::settings::{Backends, RenderCreation, WgpuSettings};
 use bevy::window::ExitCondition;
 use bevy::window::WindowMode;
 use bevy::winit::WinitPlugin;
+use wonderland_campaign::worlds::Worlds;
 use wonderland_game::GamePlugins;
 use wonderland_game::camera::Pillarbox;
-use wonderland_game::flow::{Phase, begin};
+use wonderland_game::flow::{Phase, Playlist, begin};
 use wonderland_game::level::{GameData, default_assets_dir};
 use wonderland_game::menu::GFX_MODES;
+use wonderland_game::music::{MusicRequest, world_track};
 use wonderland_game::shot::headless;
 use wonderland_logic::Session;
 
@@ -105,7 +107,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             };
             match begin(&data, &name, Session::default(), 0, None) {
-                Ok(s) => Some(s),
+                Ok((level, sim)) => Some((level, sim, Playlist::from_pack(&data, &name))),
                 Err(e) => {
                     eprintln!("{e}");
                     return ExitCode::FAILURE;
@@ -162,6 +164,10 @@ fn main() -> ExitCode {
         );
     }
     if let Some((level, sim, playlist)) = start {
+        // `StartLevelMusic` for the world that lists the level.
+        if let Some(l) = Worlds::rtwp().index_of(&level.name) {
+            app.insert_resource(MusicRequest(Some(Some(world_track(l / 10)))));
+        }
         app.insert_resource(level)
             .insert_resource(sim)
             .insert_resource(playlist)

@@ -1,0 +1,55 @@
+// RTWP's worlds, from `WorldLevelNames` in `RTWP/globals.bb`: world w
+// holds levels w*10 to w*10+9 (`WorldLevelName$`), and `WorldName$` names
+// worlds 0 to 39 in English only. An empty file name is an empty slot.
+// Trailing empty slots and worlds are left out.
+(
+    worlds: [
+        // Classic
+        (name: "BACK IN THE SWING OF THINGS", levels: ["intro.lev", "reflectors.lev", "somereflection.lev", "cleartheway.lev", "rollingstones.lev", "ldrescue.lev", "letsgetrolling.lev", "relayrace.lev"]), // 0
+        (name: "TEMPLE OF FIRE", levels: ["hotcoals.lev", "chomper.lev", "onemeoneyou.lev", "cckohmy.lev", "boulderpanic.lev", "firepit.lev", "remotecontrol.lev", "chompatbit.lev", "repetition.lev", "arena.lev"]), // 1
+        (name: "THE HAUNTED CASTLE", levels: ["notinviting.lev", "traps.lev", "gettingspooky.lev", "notsofast.lev", "pendulum.lev", "chasms.lev", "hostile.lev", "rooftop.lev"]), // 2
+        (name: "ROBOT CITY", levels: ["starlightlounge.lev", "closeencounters.lev", "multifunctionre.lev", "catchme.lev", "switchintro.lev", "switchbait.lev", "floatingplat.lev", "sharpshooter.lev", "loadingdock.lev", "zeta.lev"]), // 3
+        (name: "THE SECRET GARDEN", levels: ["gardenentrance.lev", "mushrooms.lev", "hiddensurprises.lev", "foresttrees.lev", "whatsinblock.lev"]), // 4
+        (name: "ATLANTIS", levels: ["sinking.lev", "pacifist.lev", "bridge.lev", "binarythinking.lev", "guide.lev", "littledetour.lev", "iceage.lev"]), // 5
+        (name: "UNDERWONDERWORLD", levels: ["darkcaverns.lev", "firingsquad.lev", "greedy2.lev", "ringoffire.lev", "spiral2.lev", "dontmove.lev", "plumbing.lev", "hotstuff.lev", "ticktock.lev", "shielding.lev"]), // 6
+        (name: "RETRO GAMING, WONDERLAND-STYLE", levels: ["retropacman.lev", "spaceinvaders.lev", "pong.lev", "digdug.lev", "qbert.lev", "frogger.lev", "centipede.lev", "missile.lev"]), // 7
+        (name: "AT THE EDGE OF SPACE AND TIME", levels: ["res10.dat", "rimrunner.lev", "doorways.lev", "serpentine.lev", "outoftime.lev", "housemirrors.lev", "ghostbusting.lev", "chainreaction.lev", "hopskipjump.lev"]), // 8
+        (name: "FULL CIRCLE", levels: ["endbegin.lev", "marblemaze.lev", "longshot.lev", "knightsmove.lev", "anotherway.lev", "beyondtheriver.lev", "firestorm.lev", "math.lev", "522.lev", "hurrah.lev"]), // 9
+        // Tutorial (Beginner)
+        (name: "TUTORIAL SET 1", levels: ["tut1.lv5", "tut2.lv5", "tut3.lv5", "tut4.lv5", "tut5.lv5", "tut6.lv5", "tut7.lv5", "tut8.lv5", "tut9.lv5", "tut10.lv5"]), // 10
+        (name: "TUTORIAL SET 2", levels: ["tut11.lv5", "tut12.lv5", "tut13.lv5", "tut14.lv5", "tut15.lv5", "tut16.lv5", "tut17.lv5", "tut18.lv5", "tut19.lv5", "tut20.lv5"]), // 11
+        (name: "TUT3", levels: ["intro.lev"]), // 12
+        (name: "ROBOT CITY", levels: []), // 13
+        (name: "THE SECRET GARDEN", levels: []), // 14
+        (name: "ATLANTIS", levels: []), // 15
+        (name: "UNDERWONDERWORLD", levels: []), // 16
+        (name: "RETRO GAMING, WONDERLAND-STYLE", levels: []), // 17
+        (name: "AT THE EDGE OF SPACE AND TIME", levels: []), // 18
+        (name: "FULL CIRCLE", levels: []), // 19
+        // Deluxe
+        (name: "IT'S A MYSTERY", levels: ["mystery1.lv5", "mystery2.lv5", "mystery3.lv5", "mystery4.lv5", "mystery5.lv5"]), // 20
+        (name: "UNDER THE FOGGY MOUNTAINS", levels: ["cave1.lv5", "cave2.lv5", "cave3.lv5", "cave4.lv5", "cave5.lv5", "cave6.lv5", "cave7.lv5", "cave8.lv5", "cave9.lv5", "cave10.lv5"]), // 21
+        (name: "QOOKIE'S COTTAGE", levels: ["qookie1.lv5", "qookie2.lv5", "qookie3.lv5", "qookie4.lv5", "qookie5.lv5", "qookie6.lv5", "qookie7.lv5", "qookie8.lv5"]), // 22
+        (name: "WONDERTOWN", levels: ["city1.lv5", "city2.lv5", "city3.lv5", "city4.lv5", "city5.lv5"]), // 23
+        (name: "AND THEN THERE WERE THREE", levels: ["three1.lv5", "three2.lv5", "three3.lv5", "three4.lv5", "three5.lv5"]), // 24
+        (name: "RESCUE IN SPACE", levels: ["ufo1.lv5", "ufo2.lv5", "ufo3.lv5", "ufo4.lv5", "ufo5.lv5", "ufo6.lv5", "ufo7.lv5", "ufo8.lv5", "ufo9.lv5"]), // 25
+        (name: "SECRET PASSAGES", levels: ["temple1.lv5", "temple2.lv5", "temple3.lv5", "temple4.lv5", "temple5.lv5", "temple6.lv5", "temple7.lv5", "temple8.lv5"]), // 26
+        (name: "THE RAINBOW WORLD", levels: ["rainbow.lv5"]), // 27
+        (name: "AT THE EDGE OF SPACE And TIME", levels: []), // 28
+        (name: "FULL CIRCLE", levels: []), // 29
+        // Kids
+        (name: "KIDS1", levels: ["intro.lev"]), // 30
+        (name: "KIDS2", levels: ["intro.lev"]), // 31
+        (name: "THE HAUNTED CASTLE", levels: ["intro.lev"]), // 32
+        (name: "ROBOT CITY", levels: []), // 33
+        (name: "THE SECRET GARDEN", levels: []), // 34
+        (name: "ATLANTIS", levels: []), // 35
+        (name: "UNDERWONDERWORLD", levels: []), // 36
+        (name: "RETRO GAMING, WONDERLAND-STYLE", levels: []), // 37
+        (name: "AT THE EDGE OF SPACE AND TIME", levels: []), // 38
+        (name: "FULL CIRCLE", levels: []), // 39
+        // The PlayGround (PlaygroundLevel = 400)
+        (name: "", levels: ["play1.lev", "play2.lev", "play3.lev", "play4.lev", "play5.lev", "bonus1.lev", "bonus2.lev", "bonus3.lev", "bonus4.lev", "bonus5.lev"]), // 40
+        (name: "", levels: ["theend.lev"]), // 41
+    ],
+)

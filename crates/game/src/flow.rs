@@ -2,27 +2,32 @@
 //! `MainGameLoop` does when `LevelCompleted` becomes 2 (won and faded
 //! out) or 3 (lost).
 //!
-//! Until the campaign arrives (step 4c), a won level goes on to the next
-//! in [`Playlist`] and a lost one restarts, carrying the [`Session`] (the
-//! random generator and the death-sound count) over as `StartLevel` does.
-//! Esc goes back to the main menu, where the original opens its in-game
-//! menu (step 4f).
+//! A lost level restarts, carrying the [`Session`] (the random generator
+//! and the death-sound count) over as `StartLevel` does. A won level goes
+//! back to the level selector with the next level (`CurrentLevel+1`)
+//! under the cursor.
 //!
-//! With a [`CurrentPlayer`], each level starts with the player's best
-//! score as its record, and a won level's score is kept and the player
-//! saved (`SavePlayer`). Until the campaign arrives, a level's number
-//! (`CurrentLevel`) comes from the world table in `music`; levels it does
-//! not list are not recorded.
+//! Levels started from the menus are the player's: each starts with the
+//! player's best score for `CurrentLevel` ([`Menu::level`]) as its
+//! record, and a won level's score is kept and the player saved
+//! (`SavePlayer`). The player is the menus' [`Menu::profile`].
+//!
+//! `--level` plays without the menus, through a [`Playlist`]: a won level
+//! goes on to the next in pack order, and nothing is recorded.
+//!
+//! Esc goes back to the level selector (or the main menu with no player),
+//! where the original opens its in-game menu (step 4f).
+//!
+//! [`Menu::level`]: crate::menu::Menu::level
+//! [`Menu::profile`]: crate::menu::Menu::profile
 
 use bevy::prelude::*;
-use wonderland_campaign::profile::{Players, Profile};
 use wonderland_logic::{Completion, Event, Session};
 
 use crate::audio::MenuSounds;
 use crate::level::{GameData, LevelData};
-use crate::menu::{MAIN, MenuSound};
+use crate::menu::{LEVEL_SELECT, MAIN, Menu, MenuSound};
 use crate::menu_scene::MenuState;
-use crate::music::level_index;
 use crate::objects::clear_pools;
 use crate::scene::{LevelEntity, spawn_level};
 use crate::sim::{Sim, SimStep};
@@ -35,7 +40,7 @@ pub enum Phase {
     Game,
 }
 
-/// The levels to play in order, and which is being played.
+/// `--level`'s levels to play in order, and which is being played.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct Playlist {
     pub names: Vec<String>,
@@ -43,6 +48,15 @@ pub struct Playlist {
 }
 
 impl Playlist {
+    /// The pack's levels, starting at `name`.
+    pub fn from_pack(data: &GameData, name: &str) -> Self {
+        let names = data.level_names();
+        Self {
+            index: names.iter().position(|n| n == name).unwrap_or(0),
+            names,
+        }
+    }
+
     /// The level after the current one, wrapping round.
     pub fn advance(&mut self) -> Option<&str> {
         if self.names.is_empty() {
@@ -53,18 +67,10 @@ impl Playlist {
     }
 }
 
-/// The player chosen in the menus, and where to save them.
-#[derive(Resource, Debug, Clone)]
-pub struct CurrentPlayer {
-    pub profile: Profile,
-    pub players: Option<Players>,
-}
-
-impl CurrentPlayer {
-    /// The best score for the level file `name`, if it has one.
-    fn record(&self, name: &str) -> Option<i32> {
-        self.profile.record(level_index(name)?)
-    }
+/// The player's best score for the level being played, when it is
+/// theirs.
+pub fn record(menu: &Menu) -> Option<i32> {
+    menu.profile.as_ref()?.record(menu.level)
 }
 
 pub struct FlowPlugin;
@@ -87,23 +93,18 @@ impl Plugin for FlowPlugin {
     }
 }
 
-/// Loads `name` and starts it as the first of `playlist`: the resources
-/// [`Phase::Game`] plays.
+/// Loads the level at `path` and starts it: the resources [`Phase::Game`]
+/// plays.
 pub fn begin(
     data: &GameData,
-    name: &str,
+    path: &str,
     session: Session,
     now_ms: i64,
-    player: Option<&CurrentPlayer>,
-) -> Result<(LevelData, Sim, Playlist), String> {
-    let names = data.level_names();
-    let playlist = Playlist {
-        index: names.iter().position(|n| n == name).unwrap_or(0),
-        names,
-    };
-    let level = data.load_level(name)?;
-    let sim = start(data, &level, session, now_ms, player)?;
-    Ok((level, sim, playlist))
+    record: Option<i32>,
+) -> Result<(LevelData, Sim), String> {
+    let level = data.load_level(path)?;
+    let sim = start(data, &level, session, now_ms, record)?;
+    Ok((level, sim))
 }
 
 /// `StartLevel`, with the player's best score for the level.
@@ -112,29 +113,30 @@ fn start(
     level: &LevelData,
     session: Session,
     now_ms: i64,
-    player: Option<&CurrentPlayer>,
+    record: Option<i32>,
 ) -> Result<Sim, String> {
     let mut sim = Sim::start(data, level, session, now_ms)?;
-    sim.world.record = player.and_then(|p| p.record(&level.name));
+    sim.world.record = record;
     Ok(sim)
 }
 
-/// A won level: the better score and the perfect flag go into the
-/// profile, which is then saved.
-fn record_wins(sim: Res<Sim>, level: Res<LevelData>, player: Option<ResMut<CurrentPlayer>>) {
-    let Some(mut player) = player else {
+/// A won level of the player's: the better score and the perfect flag go
+/// into the profile, which is then saved.
+fn record_wins(sim: Res<Sim>, playlist: Option<Res<Playlist>>, state: Option<ResMut<MenuState>>) {
+    let Some(mut state) = state.filter(|_| playlist.is_none()) else {
+        return;
+    };
+    let menu = &mut state.menu;
+    let Some(profile) = &mut menu.profile else {
         return;
     };
     for e in &sim.events {
         if let Event::LevelWon { score, perfect } = *e {
-            let p = &mut *player;
-            if let Some(i) = level_index(&level.name) {
-                p.profile.record_win(i, score, perfect);
-            }
-            if let Some(players) = &p.players
-                && let Err(e) = players.save(&mut p.profile)
+            profile.record_win(menu.level, score, perfect);
+            if let Some(players) = &menu.players
+                && let Err(e) = players.save(profile)
             {
-                warn!("cannot save player {}: {e}", p.profile.name);
+                warn!("cannot save player {}: {e}", profile.name);
             }
         }
     }
@@ -167,19 +169,30 @@ fn finish_level(
     data: Res<GameData>,
     mut level: ResMut<LevelData>,
     playlist: Option<ResMut<Playlist>>,
-    player: Option<Res<CurrentPlayer>>,
+    state: Option<ResMut<MenuState>>,
+    mut next: ResMut<NextState<Phase>>,
     time: Res<Time<Real>>,
     entities: Query<Entity, With<LevelEntity>>,
 ) {
     let session = || -> Session { sim.world.session.clone() };
+    let mut state = state.filter(|_| playlist.is_none());
+    let record = state.as_ref().and_then(|s| record(&s.menu));
     match sim.world.completion {
         Completion::Restart => {
             // `StartLevel(CurrentLevel)`.
-            match start(&data, &level, session(), now_ms(&time), player.as_deref()) {
+            match start(&data, &level, session(), now_ms(&time), record) {
                 Ok(new) => *sim = new,
                 Err(e) => error!("{e}"),
             }
             rebuild(&mut commands, &entities);
+        }
+        Completion::Done if state.is_some() => {
+            // `CurrentLevel=CurrentLevel+1`, `StartMenu(4)`.
+            if let Some(state) = &mut state {
+                state.menu.level += 1;
+                state.menu.start(LEVEL_SELECT);
+            }
+            next.set(Phase::Menu);
         }
         Completion::Done => {
             let next = playlist
@@ -192,13 +205,7 @@ fn finish_level(
                     level.clone()
                 }
             };
-            match start(
-                &data,
-                &new_level,
-                session(),
-                now_ms(&time),
-                player.as_deref(),
-            ) {
+            match start(&data, &new_level, session(), now_ms(&time), None) {
                 Ok(new) => {
                     info!("level {}", new_level.name);
                     *sim = new;
@@ -212,18 +219,25 @@ fn finish_level(
     }
 }
 
-/// Esc during play: the menu sound, then the main menu.
+/// Esc during play: the menu sound, then the level selector, or the main
+/// menu when no player is playing.
 fn to_menu(
     keys: Res<ButtonInput<KeyCode>>,
     mut menu: ResMut<MenuState>,
+    playlist: Option<Res<Playlist>>,
     mut next: ResMut<NextState<Phase>>,
     mut sounds: ResMut<MenuSounds>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
         sounds.0.push(MenuSound::Move);
+        let menu = &mut menu.menu;
         // Esc is still down: the menu must not take it as a press.
-        menu.menu.hold_keys();
-        menu.menu.start(MAIN);
+        menu.hold_keys();
+        if menu.profile.is_some() && playlist.is_none() {
+            menu.start(LEVEL_SELECT);
+        } else {
+            menu.start(MAIN);
+        }
         next.set(Phase::Menu);
     }
 }
