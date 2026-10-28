@@ -7,14 +7,22 @@
 //! random generator and the death-sound count) over as `StartLevel` does.
 //! Esc goes back to the main menu, where the original opens its in-game
 //! menu (step 4f).
+//!
+//! With a [`CurrentPlayer`], each level starts with the player's best
+//! score as its record, and a won level's score is kept and the player
+//! saved (`SavePlayer`). Until the campaign arrives, a level's number
+//! (`CurrentLevel`) comes from the world table in `music`; levels it does
+//! not list are not recorded.
 
 use bevy::prelude::*;
-use wonderland_logic::{Completion, Session};
+use wonderland_campaign::profile::{Players, Profile};
+use wonderland_logic::{Completion, Event, Session};
 
 use crate::audio::MenuSounds;
 use crate::level::{GameData, LevelData};
 use crate::menu::{MAIN, MenuSound};
 use crate::menu_scene::MenuState;
+use crate::music::level_index;
 use crate::objects::clear_pools;
 use crate::scene::{LevelEntity, spawn_level};
 use crate::sim::{Sim, SimStep};
@@ -45,6 +53,20 @@ impl Playlist {
     }
 }
 
+/// The player chosen in the menus, and where to save them.
+#[derive(Resource, Debug, Clone)]
+pub struct CurrentPlayer {
+    pub profile: Profile,
+    pub players: Option<Players>,
+}
+
+impl CurrentPlayer {
+    /// The best score for the level file `name`, if it has one.
+    fn record(&self, name: &str) -> Option<i32> {
+        self.profile.record(level_index(name)?)
+    }
+}
+
 pub struct FlowPlugin;
 
 impl Plugin for FlowPlugin {
@@ -57,7 +79,7 @@ impl Plugin for FlowPlugin {
             .add_systems(OnExit(Phase::Game), despawn_level)
             .add_systems(
                 Update,
-                (finish_level, to_menu)
+                (record_wins, finish_level, to_menu)
                     .chain()
                     .after(SimStep)
                     .run_if(in_state(Phase::Game)),
@@ -72,6 +94,7 @@ pub fn begin(
     name: &str,
     session: Session,
     now_ms: i64,
+    player: Option<&CurrentPlayer>,
 ) -> Result<(LevelData, Sim, Playlist), String> {
     let names = data.level_names();
     let playlist = Playlist {
@@ -79,8 +102,42 @@ pub fn begin(
         names,
     };
     let level = data.load_level(name)?;
-    let sim = Sim::start(data, &level, session, now_ms)?;
+    let sim = start(data, &level, session, now_ms, player)?;
     Ok((level, sim, playlist))
+}
+
+/// `StartLevel`, with the player's best score for the level.
+fn start(
+    data: &GameData,
+    level: &LevelData,
+    session: Session,
+    now_ms: i64,
+    player: Option<&CurrentPlayer>,
+) -> Result<Sim, String> {
+    let mut sim = Sim::start(data, level, session, now_ms)?;
+    sim.world.record = player.and_then(|p| p.record(&level.name));
+    Ok(sim)
+}
+
+/// A won level: the better score and the perfect flag go into the
+/// profile, which is then saved.
+fn record_wins(sim: Res<Sim>, level: Res<LevelData>, player: Option<ResMut<CurrentPlayer>>) {
+    let Some(mut player) = player else {
+        return;
+    };
+    for e in &sim.events {
+        if let Event::LevelWon { score, perfect } = *e {
+            let p = &mut *player;
+            if let Some(i) = level_index(&level.name) {
+                p.profile.record_win(i, score, perfect);
+            }
+            if let Some(players) = &p.players
+                && let Err(e) = players.save(&mut p.profile)
+            {
+                warn!("cannot save player {}: {e}", p.profile.name);
+            }
+        }
+    }
 }
 
 fn despawn_level(mut commands: Commands, entities: Query<Entity, With<LevelEntity>>) {
@@ -110,6 +167,7 @@ fn finish_level(
     data: Res<GameData>,
     mut level: ResMut<LevelData>,
     playlist: Option<ResMut<Playlist>>,
+    player: Option<Res<CurrentPlayer>>,
     time: Res<Time<Real>>,
     entities: Query<Entity, With<LevelEntity>>,
 ) {
@@ -117,7 +175,7 @@ fn finish_level(
     match sim.world.completion {
         Completion::Restart => {
             // `StartLevel(CurrentLevel)`.
-            match Sim::start(&data, &level, session(), now_ms(&time)) {
+            match start(&data, &level, session(), now_ms(&time), player.as_deref()) {
                 Ok(new) => *sim = new,
                 Err(e) => error!("{e}"),
             }
@@ -134,7 +192,13 @@ fn finish_level(
                     level.clone()
                 }
             };
-            match Sim::start(&data, &new_level, session(), now_ms(&time)) {
+            match start(
+                &data,
+                &new_level,
+                session(),
+                now_ms(&time),
+                player.as_deref(),
+            ) {
                 Ok(new) => {
                     info!("level {}", new_level.name);
                     *sim = new;

@@ -19,17 +19,20 @@
 use bevy::app::AppExit;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::Projection;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::KeyboardInput;
 use bevy::math::Affine2;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
+use wonderland_campaign::profile::Players;
 use wonderland_logic::world::Lights;
 use wonderland_logic::{Clock, Session};
 
 use crate::audio::MenuSounds;
 use crate::camera::{FAR, GameCamera, fov, view_aspect};
 use crate::coords::{rotation, triangle, vec};
-use crate::flow::{Phase, begin};
+use crate::flow::{CurrentPlayer, Phase, begin};
 use crate::hud::{Screen, ScreenFilled, ScreenImage, camera_rect};
 use crate::level::GameData;
 use crate::lighting::factor;
@@ -100,6 +103,7 @@ fn now_ms(time: &Time<Real>) -> i64 {
 
 fn setup_menu(mut commands: Commands, data: Res<GameData>, time: Res<Time<Real>>) {
     let mut menu = Menu::new();
+    menu.players = Some(Players::new(data.assets.dir()));
     // `WL_MENU=<timer>[,<menu>]`, for screenshots.
     let spec = std::env::var("WL_MENU").unwrap_or_default();
     let mut spec = spec.split(',').map(|v| v.trim().parse::<i32>().ok());
@@ -132,20 +136,28 @@ fn read_keys(keys: &ButtonInput<KeyCode>) -> MenuKeys {
         space: keys.pressed(KeyCode::Space),
         one: keys.pressed(KeyCode::Digit1),
         zero: keys.pressed(KeyCode::Digit0),
+        delete: keys.pressed(KeyCode::Delete),
+        backspace: keys.pressed(KeyCode::Backspace),
     }
 }
 
 /// The logos and the selector bar.
 fn menu_images(menu: &Menu) -> Vec<ScreenImage> {
     let mut out = Vec::new();
-    if let Some(Selector { x, y, half_width }) = menu.selector {
+    if let Some(Selector {
+        x,
+        y,
+        z,
+        half_width,
+    }) = menu.selector
+    {
         out.push(ScreenImage {
             texture: TextureRef {
                 path: "graphics\\menubar.jpg".into(),
                 flags: 1,
                 rotation: 0,
             },
-            rect: camera_rect(x, y, Selector::Z, half_width, Selector::HALF_HEIGHT),
+            rect: camera_rect(x, y, z, half_width, Selector::HALF_HEIGHT),
             uv: [0.0, 0.0, 1.0, 1.0],
             colour: [1.0, 1.0, 1.0, 0.6],
         });
@@ -189,6 +201,7 @@ fn menu_frame(
     mut state: ResMut<MenuState>,
     mut data: ResMut<GameData>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut typed: MessageReader<KeyboardInput>,
     time: Res<Time<Real>>,
     mut screen: ResMut<Screen>,
     mut sounds: ResMut<MenuSounds>,
@@ -199,6 +212,16 @@ fn menu_frame(
     let now = now_ms(&time);
     let ticks = state.clock.advance(now).ticks;
     let st = &mut *state;
+    for k in typed.read() {
+        if k.state == ButtonState::Pressed
+            && let Some(text) = &k.text
+        {
+            text.bytes()
+                .filter(u8::is_ascii)
+                .for_each(|c| st.menu.type_char(c));
+        }
+    }
+    st.menu.millisecs = now as i32;
     let actions = if st.quitting.is_some() {
         Vec::new()
     } else {
@@ -212,12 +235,17 @@ fn menu_frame(
             // `TweenTime=MilliSecs()-TweenPeriod`.
             Action::Entered(_) => st.clock = Clock::new(&data.ruleset, now),
             Action::OptionsChanged => data.apply_config(),
+            Action::Warn(e) => warn!("{e}"),
             Action::SaveOptions => {
                 if let Err(e) = data.save_config() {
                     warn!("cannot save the options: {e}");
                 }
             }
             Action::StartGame => {
+                let player = st.menu.profile.take().map(|profile| CurrentPlayer {
+                    profile,
+                    players: st.menu.players.clone(),
+                });
                 let session = sim
                     .as_ref()
                     .map_or_else(Session::default, |s| s.world.session.clone());
@@ -226,12 +254,16 @@ fn menu_frame(
                     .or_else(|| data.level_names().into_iter().next());
                 match first
                     .ok_or_else(|| "no levels in the pack".to_owned())
-                    .and_then(|n| begin(&data, &n, session, now))
+                    .and_then(|n| begin(&data, &n, session, now, player.as_ref()))
                 {
                     Ok((level, sim, playlist)) => {
                         commands.insert_resource(level);
                         commands.insert_resource(sim);
                         commands.insert_resource(playlist);
+                        match player {
+                            Some(p) => commands.insert_resource(p),
+                            None => commands.remove_resource::<CurrentPlayer>(),
+                        }
                         next.set(Phase::Game);
                     }
                     Err(e) => {

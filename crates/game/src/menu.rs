@@ -3,10 +3,10 @@
 //!
 //! This module has no Bevy state, so it is tested headless; `menu_scene`
 //! draws it and carries out the [`Action`]s. Ported so far: the title (0),
-//! the main menu (1), options (9), "Exit to Windows?" (10) and "Go
-//! Online?" (15). START GAME (player select, 2) is a stop-gap that plays
-//! the pack from its first level until profiles (step 4b) and the
-//! campaign (4c) arrive.
+//! the main menu (1), player select (2), new player (3), "Confirm Player
+//! Deletion?" (6), options (9), "Exit to Windows?" (10) and "Go Online?"
+//! (15). Choosing or creating a player should open the level pack menu
+//! (13); until that is ported (step 4d) it starts the game.
 //!
 //! Each `MenuLoopN` is one frame: it lays out the text (the letters get
 //! their alpha when first shown), runs the frame's ticks of
@@ -14,8 +14,10 @@
 //! per frame as held keys; `CursorKeyPressed` turns a held key into one
 //! press.
 
+use std::collections::VecDeque;
 use std::f32::consts::FRAC_1_SQRT_2;
 
+use wonderland_campaign::profile::{Entry, MAX_PLAYERS, Players, Profile};
 use wonderland_formats::config::Options as ConfigOptions;
 
 use crate::hud::{Edge, Letter, display_text, pinned};
@@ -23,6 +25,8 @@ use crate::hud::{Edge, Letter, display_text, pinned};
 pub const TITLE: i32 = 0;
 pub const MAIN: i32 = 1;
 pub const PLAYER_SELECT: i32 = 2;
+pub const NEW_PLAYER: i32 = 3;
+pub const DELETE_PLAYER: i32 = 6;
 pub const OPTIONS: i32 = 9;
 pub const EXIT: i32 = 10;
 pub const ONLINE: i32 = 15;
@@ -41,6 +45,9 @@ pub struct MenuKeys {
     /// The number keys 1 and 0 (the options menu's secret song).
     pub one: bool,
     pub zero: bool,
+    /// Delete (player select) and Backspace (new player).
+    pub delete: bool,
+    pub backspace: bool,
 }
 
 /// The sounds the menus play.
@@ -49,6 +56,10 @@ pub enum MenuSound {
     /// `SFXMenuSound(0)` (`sound\menumove.wav`) through `PlayMySound`, so
     /// at the sound level and not at all when sound is off.
     Move,
+    /// `SFXMenuSound(1)` (`sound\type.wav`), typing a name.
+    Type,
+    /// `SFXLastCoin` (`sound\lastcoin.wav`), a new player created.
+    LastCoin,
     /// `newsounds\song1c.wav` through `PlaySound`, at full volume.
     SecretSong,
     /// `newsounds\exitN.wav`, played as the game closes.
@@ -72,8 +83,11 @@ pub enum Action {
     Sound(MenuSound),
     /// `StartMenu` ran: restart the tick clock (`TweenTime`).
     Entered(i32),
-    /// Leave the menus and play (for now, the pack from its first level).
+    /// Leave the menus and play [`Menu::profile`] (for now, the pack
+    /// from its first level).
     StartGame,
+    /// A player file could not be read or written.
+    Warn(String),
     /// An option changed; the game's settings follow it.
     OptionsChanged,
     /// `SaveOptions`.
@@ -163,11 +177,12 @@ impl Text {
 }
 
 /// `MenuSelector`, the bar behind the chosen line: a sprite on the camera
-/// at `(x, y, 1.1)` with half-size `(half_width, 0.02)`.
+/// at `(x, y, z)` with half-size `(half_width, 0.02)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Selector {
     pub x: f32,
     pub y: f32,
+    pub z: f32,
     pub half_width: f32,
 }
 
@@ -178,11 +193,11 @@ impl Selector {
         Self {
             x: -0.5 + 24.4 * 0.02 + 0.01,
             y: 0.372 - row as f32 * 0.044 + 0.027,
+            z: 1.1,
             half_width: width * 0.012,
         }
     }
 
-    pub const Z: f32 = 1.1;
     pub const HALF_HEIGHT: f32 = 0.02;
 }
 
@@ -334,6 +349,20 @@ pub struct Menu {
     pub version_no1: i32,
     /// `Language`, from the options.
     pub language: i32,
+    /// The `players` folder; `None` lists no players and saves nothing.
+    pub players: Option<Players>,
+    /// `PlayerName$` and the rest of the select screen's list.
+    list: Vec<Entry>,
+    /// `Player2BDeleted`.
+    to_delete: usize,
+    /// `CurrentPlayerName$` as it is typed.
+    pub player_name: String,
+    /// What `GetKey` returns: the characters typed, one taken per frame.
+    typed: VecDeque<u8>,
+    /// `MilliSecs()`, for a new player's id.
+    pub millisecs: i32,
+    /// The player chosen or created.
+    pub profile: Option<Profile>,
     pub text: Text,
     /// `Logo1`, `Logo2` shown.
     pub logos: bool,
@@ -356,6 +385,13 @@ impl Default for Menu {
             secret_music: 0,
             version_no1: 10,
             language: 0,
+            players: None,
+            list: Vec::new(),
+            to_delete: 0,
+            player_name: String::new(),
+            typed: VecDeque::new(),
+            millisecs: 0,
+            profile: None,
             text: Text::default(),
             logos: false,
             selector: None,
@@ -394,12 +430,43 @@ impl Menu {
             if !matches!(self.current, 7 | 9 | 10 | 0 | 15) {
                 self.actions.push(Action::TitleMusic);
             }
-        } else if menu == PLAYER_SELECT || menu == 3 {
+        } else if menu == PLAYER_SELECT {
             self.actions.push(Action::StopMusic);
+            self.list = self.list_players();
+            // No players: straight to entering a name.
+            if self.list.is_empty() {
+                self.start(NEW_PLAYER);
+                return;
+            }
+        } else if menu == NEW_PLAYER {
+            self.actions.push(Action::StopMusic);
+            self.player_name.clear();
+            // `GetKey`'s queue holds every key typed since the game
+            // started; only what is typed on this screen counts here.
+            self.typed.clear();
         }
         self.current = menu;
         self.update_selector();
         self.actions.push(Action::Entered(menu));
+    }
+
+    /// A character typed (what `GetKey` returns), for the name entry.
+    pub fn type_char(&mut self, c: u8) {
+        if self.current == NEW_PLAYER {
+            self.typed.push_back(c);
+        }
+    }
+
+    /// `StartMenu(2)`'s list of the players on disk.
+    fn list_players(&mut self) -> Vec<Entry> {
+        let Some(players) = &self.players else {
+            return Vec::new();
+        };
+        players.list().unwrap_or_else(|e| {
+            self.actions
+                .push(Action::Warn(format!("{}: {e}", players.dir.display())));
+            Vec::new()
+        })
     }
 
     /// Takes the keys held now as already pressed, as the original does
@@ -437,6 +504,9 @@ impl Menu {
         match self.current {
             TITLE => self.title(keys, ticks),
             MAIN => self.main(keys, ticks),
+            PLAYER_SELECT => self.player_select(keys, ticks),
+            NEW_PLAYER => self.new_player(keys, ticks),
+            DELETE_PLAYER => self.delete_player(keys, ticks),
             OPTIONS => self.options(keys, ticks, options),
             EXIT => self.exit(keys, ticks),
             ONLINE => self.online(keys, ticks),
@@ -675,7 +745,6 @@ impl Menu {
                 0 => {
                     self.end();
                     self.start(PLAYER_SELECT);
-                    self.actions.push(Action::StartGame);
                 }
                 1 => {
                     self.end();
@@ -702,6 +771,249 @@ impl Menu {
         }
         // Holding 1, 2 and 3 jumps to the ending (`StartMenu(12)`), which
         // comes with step 4f.
+    }
+
+    /// `MenuLoop2`: CREATE NEW PLAYER, then the players on disk with
+    /// their levels, custom levels and score. Delete asks to delete the
+    /// chosen player.
+    fn player_select(&mut self, keys: MenuKeys, ticks: u32) {
+        let tx = &mut self.text;
+        match self.language {
+            1 => {
+                tx.center("SPIELERAUSWAHL", 4.0, 1.0, 50);
+                tx.center("------------------------------", 5.0, 1.0, 51);
+                tx.display("Name             Levels Punkte", 10.0, 6.0, 1.0, 52);
+                tx.display("NEUER SPIELER", 10.0, 7.0, 1.0, 53);
+            }
+            2 => {
+                tx.center("CHOISIS LE JOUEUR", 4.0, 1.0, 50);
+                tx.center("------------------------------", 5.0, 1.0, 51);
+                tx.display("Nom              Niveau  Score", 10.0, 6.0, 1.0, 52);
+                tx.display("CREER NOUVEAU JOUEUR", 10.0, 7.0, 1.0, 53);
+            }
+            _ => {
+                tx.center("SELECT PLAYER", 4.0, 1.0, 50);
+                tx.center(RULE_46, 5.0, 1.0, 51);
+                tx.display(
+                    "Name             Levels  Custom    Total Score",
+                    2.0,
+                    6.0,
+                    1.0,
+                    52,
+                );
+                tx.display("CREATE NEW PLAYER", 2.0, 7.0, 1.0, 53);
+            }
+        }
+        // Numbers end before the column given.
+        let number = |tx: &mut Text, v: i32, end: i32, y: f32, tag: i32| {
+            let s = v.to_string();
+            tx.display(&s, (end - s.len() as i32) as f32, y, 1.0, tag);
+        };
+        let n = self.list.len() as i32;
+        for (i, e) in self.list.iter().enumerate() {
+            let (i, y) = (i as i32, 8.0 + i as f32);
+            tx.display(&e.file_stem.to_ascii_uppercase(), 2.0, y, 1.0, 54 + 4 * i);
+            number(tx, e.levels, 25, y, 55 + 4 * i);
+            number(tx, e.extra_levels, 33, y, 57 + 4 * i);
+            number(tx, e.score, 48, y, 56 + 4 * i);
+        }
+        tx.center(RULE_46, 8.0 + n as f32, 1.0, 55 + 4 * n);
+        self.place_selector(7 + self.option, 48.5);
+        self.text.activate(|| None);
+
+        self.run_ticks(ticks, false);
+
+        // `KeyDown(211)` comes after Enter and before Esc.
+        if keys.delete && !(keys.up || keys.down || keys.enter) {
+            if !self.latched {
+                self.latched = true;
+                if self.option > 0 {
+                    self.to_delete = (self.option - 1) as usize;
+                    self.end();
+                    self.start(DELETE_PLAYER);
+                }
+            }
+            return;
+        }
+        match self.navigate(keys, n + 1) {
+            Some(Press::Enter) if self.option == 0 => {
+                // With ten players there is no room for another.
+                if self.list.len() < MAX_PLAYERS {
+                    self.end();
+                    self.start(NEW_PLAYER);
+                }
+            }
+            Some(Press::Enter) => {
+                self.end();
+                let entry = &self.list[(self.option - 1) as usize];
+                let loaded = match &self.players {
+                    Some(p) => p.load(entry),
+                    None => Err("no players folder".to_owned()),
+                };
+                match loaded {
+                    Ok(profile) => {
+                        self.profile = Some(profile);
+                        self.play();
+                    }
+                    Err(e) => {
+                        self.actions.push(Action::Warn(e));
+                        self.start(PLAYER_SELECT);
+                    }
+                }
+            }
+            Some(Press::Escape) => {
+                self.end();
+                self.start(MAIN);
+            }
+            None => {}
+        }
+    }
+
+    /// `StartMenu(13)`, the level pack menu, which comes with step 4d;
+    /// until then the chosen player goes straight into the game.
+    fn play(&mut self) {
+        self.actions.push(Action::StartGame);
+    }
+
+    /// `MenuLoop3`: typing a new player's name, up to 15 letters and
+    /// spaces. Enter creates the player.
+    fn new_player(&mut self, keys: MenuKeys, ticks: u32) {
+        let (title, rule) = match self.language {
+            1 => (
+                "SPIELER - BITTE NAMEN EINGEBEN:",
+                "-------------------------------",
+            ),
+            2 => (
+                "NOUVEAU JOUEUR - S.V.P. ECRIS TON NOM:",
+                "--------------------------------------",
+            ),
+            _ => (
+                "NEW PLAYER - PLEASE ENTER NAME:",
+                "-------------------------------",
+            ),
+        };
+        let tx = &mut self.text;
+        tx.center(title, 4.0, 1.0, 50);
+        tx.center(rule, 5.0, 1.0, 51);
+        tx.center(&self.player_name, 7.0, 1.0, 52);
+        // `LevelTimer` does not count here, so the cursor does not blink.
+        let cursor = if self.level_timer % 50 < 25 { ":" } else { " " };
+        let x = 25.0 + self.player_name.len() as f32 / 2.0;
+        tx.display(cursor, x, 7.0, 1.0, 53);
+        // Moved above the top of the screen, out of sight.
+        let half_width = self.selector_at.map_or(25.0 * 0.012, |s| s.half_width);
+        self.selector_at = Some(Selector {
+            x: -0.5 + 24.4 * 0.02 + 0.01,
+            y: 0.375 - (-2.0) * 0.04 - 0.013,
+            z: 1.001,
+            half_width,
+        });
+        self.update_selector();
+        self.text.activate(|| None);
+
+        self.run_ticks(ticks, false);
+
+        let mut key = self.typed.pop_front().map_or(0, i32::from);
+        if key >= 97 {
+            key -= 32;
+        }
+        let room = self.player_name.len() < 15;
+        let typed = match key {
+            65..=90 | 32 if room => Some(key as u8 as char),
+            _ => None,
+        };
+        if let Some(c) = typed {
+            if !self.latched {
+                self.actions.push(Action::Sound(MenuSound::Type));
+                self.player_name.push(c);
+                self.latched = true;
+            }
+        } else if keys.backspace && !self.player_name.is_empty() {
+            if !self.latched {
+                self.actions.push(Action::Sound(MenuSound::Type));
+                self.player_name.pop();
+                self.latched = true;
+            }
+        } else if keys.enter {
+            if !self.latched {
+                self.actions.push(Action::Sound(MenuSound::LastCoin));
+                let profile = Profile::new(&self.player_name, self.millisecs);
+                if let Some(Err(e)) = self.players.as_ref().map(|p| p.create(&profile)) {
+                    self.actions
+                        .push(Action::Warn(format!("{}: {e}", profile.name)));
+                }
+                self.profile = Some(profile);
+                self.latched = true;
+                self.end();
+                self.play();
+            }
+        } else if keys.escape {
+            if !self.latched {
+                self.latched = true;
+                self.end();
+                // With no players this comes straight back here.
+                self.start(PLAYER_SELECT);
+            }
+        } else {
+            self.latched = false;
+        }
+    }
+
+    /// `MenuLoop6`: "Confirm Player Deletion?". YES keeps a `.bak` of the
+    /// file and deletes it; either way it goes back to player select.
+    fn delete_player(&mut self, keys: MenuKeys, ticks: u32) {
+        let lines: [&str; 5] = match self.language {
+            1 => [
+                "SPIELER LOESCHEN?",
+                "-----------------",
+                "(Backup im Player Directory)",
+                "Ja",
+                "Nein",
+            ],
+            2 => [
+                "CONFIRMEZ L'EFFACEMENT DU JOUER?",
+                "-------------------------------",
+                "La sauvegarde est stockee dans le dossier PLAYERS",
+                "OUI",
+                "NON",
+            ],
+            _ => [
+                "CONFIRM PLAYER DELETION?",
+                "------------------------",
+                "(backup is stored in PLAYER directory)",
+                "YES",
+                "NO",
+            ],
+        };
+        for (i, (line, y)) in lines.iter().zip([4.0, 5.0, 6.0, 8.0, 9.0]).enumerate() {
+            self.text.center(line, y, 1.0, 50 + i as i32);
+        }
+        self.place_selector(8 + self.option, 4.5);
+        self.text.activate(|| None);
+
+        // Only `LevelTimer` counts: the background stands still. (The
+        // original also scrolls `MenuBackGroundTex`, a name nothing else
+        // uses.)
+        self.level_timer += ticks as i32;
+
+        // Esc does nothing here and does not hold the other keys.
+        let keys = MenuKeys {
+            escape: false,
+            ..keys
+        };
+        if let Some(Press::Enter) = self.navigate(keys, 2) {
+            if self.option == 0 {
+                let entry = self.list.get(self.to_delete);
+                if let (Some(players), Some(entry)) = (&self.players, entry)
+                    && let Err(e) = players.delete(entry)
+                {
+                    self.actions
+                        .push(Action::Warn(format!("{}: {e}", entry.path.display())));
+                }
+            }
+            self.end();
+            self.start(PLAYER_SELECT);
+        }
     }
 
     /// `MenuLoop9`: options.
@@ -1029,6 +1341,9 @@ impl Menu {
     }
 }
 
+/// The 46-dash line on the player select screen.
+const RULE_46: &str = "----------------------------------------------";
+
 /// `MyGfxModeWidth`/`MyGfxModeHeight`, as `Setup` fills them in.
 pub const GFX_MODES: [(u32, u32); 5] = [
     (640, 480),
@@ -1076,6 +1391,8 @@ mod tests {
         space: false,
         one: false,
         zero: false,
+        delete: false,
+        backspace: false,
     };
 
     fn text(m: &Menu) -> String {
@@ -1160,11 +1477,14 @@ mod tests {
         let sel = m.selector.unwrap();
         assert!((sel.y - (0.372 - 9.0 * 0.044 + 0.027)).abs() < 1e-6);
         // Going from one key to the next needs a frame with neither.
-        assert!(!m.frame(ENTER, 1, &mut o).contains(&Action::StartGame));
+        m.frame(ENTER, 1, &mut o);
+        assert_eq!(m.current, MAIN);
         m.frame(KEYS, 1, &mut o);
         let a = press(&mut m, &mut o, ENTER);
-        assert!(a.contains(&Action::StartGame));
-        assert!(m.text.shown().is_empty() && !m.logos);
+        // No players folder: no players, so a new one.
+        assert_eq!(m.current, NEW_PLAYER);
+        assert!(a.contains(&Action::StopMusic));
+        assert!(!m.logos);
     }
 
     #[test]
@@ -1247,5 +1567,104 @@ mod tests {
         assert_eq!(exit_sound(0), MenuSound::Exit(3));
         assert_eq!(exit_sound(59), MenuSound::Exit(5));
         assert_eq!(exit_sound(99), MenuSound::Exit(8));
+    }
+
+    fn players_menu(tag: &str) -> (Menu, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("wl-menu-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut m = Menu::new();
+        m.players = Some(Players::new(&dir));
+        m.end();
+        m.start(MAIN);
+        (m, dir)
+    }
+
+    fn type_name(m: &mut Menu, o: &mut ConfigOptions, name: &str) {
+        for c in name.bytes() {
+            m.type_char(c);
+            m.frame(KEYS, 1, o);
+            m.frame(KEYS, 1, o);
+        }
+    }
+
+    #[test]
+    fn first_player_is_typed_and_created() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let (mut m, dir) = players_menu("create");
+        press(&mut m, &mut o, ENTER);
+        // No players yet: straight to the name.
+        assert_eq!(m.current, NEW_PLAYER);
+        type_name(&mut m, &mut o, "ab c9");
+        assert_eq!(m.player_name, "AB C");
+        let a = press(
+            &mut m,
+            &mut o,
+            MenuKeys {
+                backspace: true,
+                ..KEYS
+            },
+        );
+        assert!(a.contains(&Action::Sound(MenuSound::Type)));
+        type_name(&mut m, &mut o, "d");
+        assert!(text(&m).contains("AB D:"));
+        // Esc with no players comes back here, with the name cleared.
+        press(&mut m, &mut o, ESCAPE);
+        assert_eq!((m.current, m.player_name.as_str()), (NEW_PLAYER, ""));
+        type_name(&mut m, &mut o, "Ab");
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::Sound(MenuSound::LastCoin)));
+        assert!(a.contains(&Action::StartGame));
+        assert_eq!(m.profile.as_ref().unwrap().name, "AB");
+        assert!(dir.join("players/ab.pla").is_file());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn players_are_listed_chosen_and_deleted() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let (mut m, dir) = players_menu("select");
+        let players = m.players.clone().unwrap();
+        let mut zed = Profile::new("ZED", 1);
+        players.create(&Profile::new("AMY", 2)).unwrap();
+        players.create(&zed).unwrap();
+        zed.record_win(4, 1234, false);
+        players.save(&mut zed).unwrap();
+
+        press(&mut m, &mut o, ENTER);
+        assert_eq!(m.current, PLAYER_SELECT);
+        m.frame(KEYS, 1, &mut o);
+        let t = text(&m);
+        assert!(t.contains("CREATE NEW PLAYER"));
+        assert!(t.contains("AMY00"), "{t}");
+        assert!(t.contains("ZED101234"), "{t}");
+
+        // Delete on CREATE NEW PLAYER does nothing.
+        let del = MenuKeys {
+            delete: true,
+            ..KEYS
+        };
+        press(&mut m, &mut o, del);
+        assert_eq!(m.current, PLAYER_SELECT);
+        press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, del);
+        assert_eq!(m.current, DELETE_PLAYER);
+        // NO keeps the player.
+        press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, ENTER);
+        assert_eq!(m.current, PLAYER_SELECT);
+        assert!(dir.join("players/amy.pla").is_file());
+        press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, del);
+        press(&mut m, &mut o, ENTER);
+        assert!(!dir.join("players/amy.pla").exists());
+        assert!(dir.join("players/amy.bak").is_file());
+
+        // ZED is now the only player.
+        assert_eq!(m.current, PLAYER_SELECT);
+        press(&mut m, &mut o, DOWN);
+        let a = press(&mut m, &mut o, ENTER);
+        assert!(a.contains(&Action::StartGame));
+        assert_eq!(m.profile.as_ref().unwrap().record(4), Some(1234));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

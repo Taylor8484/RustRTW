@@ -104,7 +104,7 @@ fn main() -> ExitCode {
                 eprintln!("no such level: {n}");
                 return ExitCode::FAILURE;
             };
-            match begin(&data, &name, Session::default(), 0) {
+            match begin(&data, &name, Session::default(), 0, None) {
                 Ok(s) => Some(s),
                 Err(e) => {
                     eprintln!("{e}");

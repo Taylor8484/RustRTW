@@ -306,15 +306,21 @@ pub fn world_levels() -> impl Iterator<Item = &'static str> {
 /// The first world that lists the level file `name` (any folder,
 /// extension or case).
 pub fn world_of(name: &str) -> Option<i32> {
+    level_index(name).map(|l| l / 10)
+}
+
+/// `CurrentLevel` for the level file `name`: its world times ten plus its
+/// place in the world, from the first world that lists it.
+pub fn level_index(name: &str) -> Option<i32> {
     let file = name.rsplit(['\\', '/']).next().unwrap_or(name);
     let stem = file
         .rsplit_once('.')
         .map_or(file, |(s, _)| s)
         .to_lowercase();
-    WORLDS
-        .iter()
-        .find(|(_, levels)| levels.contains(&stem.as_str()))
-        .map(|(w, _)| *w)
+    WORLDS.iter().find_map(|(w, levels)| {
+        let i = levels.iter().position(|l| *l == stem)?;
+        Some(w * 10 + i as i32)
+    })
 }
 
 /// What the music should do next: `Some(track)` (re)starts it, `None`
@@ -427,6 +433,9 @@ mod tests {
         assert_eq!(world_of(r"levels\Intro.lev"), Some(0));
         assert_eq!(world_of("tut11.lv5"), Some(11));
         assert_eq!(world_of("custom.lev"), None);
+        assert_eq!(level_index("intro"), Some(0));
+        assert_eq!(level_index("reflectors.lev"), Some(1));
+        assert!(WORLDS.iter().all(|(_, levels)| levels.len() <= 10));
         assert_eq!(world_track(0).file, "res5.dat");
         assert_eq!(
             world_track(7),

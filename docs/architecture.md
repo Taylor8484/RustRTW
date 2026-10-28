@@ -131,6 +131,14 @@ differences are parameters on a `Ruleset`, not separate code paths per game.
 How levels are sequenced and unlocked: TOW's world list, RTWP's worlds plus
 level packs, WSW's world map and story screens.
 
+- `profile` — RTWP's player profiles: `Profile` is the `CurrentPlayer*`
+  globals (`CreateNewPlayer`, `LoadPlayer`, `SavePlayer`, the score kept
+  on a win), `Players` the `players` folder in the game folder (the select
+  screen's list of up to ten, new players with a `.bak` of a file of the
+  same name, deletion to `.bak`, old-format files renamed `.old`).
+  Loading reads like Blitz, zeros past the end, so a new player's short
+  file loads with levels 1 to 3 marked perfect, as in the original.
+
 ### game
 
 The Bevy front end. v1 is one game: the RTWP engine, with TOW's levels
@@ -202,8 +210,9 @@ pinned and upgraded deliberately.
   draws `hud::Screen` in the game's bitmap font (UI image nodes on
   `DisplayText`'s 50-column grid): the coin/bonus/time line and the signs
   in play, the menu text, selector bar and logos in the menus;
-  `FlowPlugin` holds the `Phase` (`GamePhase`: menus or play), restarts a
-  lost level, moves on from a won one through a `Playlist` (pack order
+  `FlowPlugin` holds the `Phase` (`GamePhase`: menus or play) and the
+  `CurrentPlayer` (gives each level its record, keeps a won level's
+  score and saves the player), restarts a lost level, moves on from a won one through a `Playlist` (pack order
   until the campaign) and goes back to the main menu on Esc;
   `MenuScenePlugin` runs the menus and draws their background. The level
   plugins run only in `Phase::Game`.
@@ -211,7 +220,10 @@ pinned and upgraded deliberately.
   (`StartMenu`, `EndMenu`, each `MenuLoopN` as one frame, the text by
   tag, `MenuBkgUpdate`), so it is unit tested; it returns `Action`s
   (sounds, start a game, save the options, quit) for `menu_scene` to
-  carry out. Keys are read once per frame as held keys, with
+  carry out. Player select, new player and delete player (menus 2, 3,
+  6) read and write the profiles through `campaign::profile`; the name
+  is typed from the window's text input, one character a frame as
+  `GetKey` returns them. Keys are read once per frame as held keys, with
   `CursorKeyPressed` turning a held key into one press, as in the
   original. The background is `MenuBkgStyle` 1: a cloud-textured
   cylinder, two water planes, mountains from the `res9.dat` heightmap

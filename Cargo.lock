@@ -5724,6 +5724,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "wonderland-campaign"
+version = "0.1.0"
+dependencies = [
+ "wonderland-formats",
+]
+
+[[package]]
 name = "wonderland-formats"
 version = "0.1.0"
 dependencies = [
@@ -5740,6 +5747,7 @@ dependencies = [
  "bevy",
  "bevy_render",
  "image",
+ "wonderland-campaign",
  "wonderland-formats",
  "wonderland-logic",
  "xmrs",
