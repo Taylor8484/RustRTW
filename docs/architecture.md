@@ -60,6 +60,10 @@ tested headless and outlive any framework upgrade or swap.
   (case-insensitive), then a loose file in the game folder.
 - `level` — level files v1–v6 as stored. Parsing takes the loading `Game`
   because TOW, RTWP and WSW read the header differently.
+- `catalogue` — the pieces of v5 and v6 levels: each family of tile or
+  object codes as one named piece with choices (direction, timing, colour),
+  its palette group and its sprite in the original editor's sheets.
+  `crates/logic/tests/catalogue.rs` checks the choices against level setup.
 - `save` — player files (`players/*.pla`, `.bak`), one layout per game.
 - `config` — `options.cfg`, TOW's `extra.cfg`, WSW's `story.dat`. These
   parse like Blitz: missing ints read as 0, since the shipped WSW

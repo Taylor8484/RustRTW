@@ -8,6 +8,7 @@
 
 pub mod assets;
 pub mod blitz;
+pub mod catalogue;
 pub mod config;
 pub mod level;
 pub mod mesh;

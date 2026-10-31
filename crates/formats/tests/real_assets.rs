@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use wonderland_formats::catalogue::{self, Layer};
 use wonderland_formats::{Game, GameAssets, Level, Pack};
 
 const GAMES: [&str; 3] = ["TOW", "RTWP", "WSW"];
@@ -223,4 +224,59 @@ fn candidates(game: &str, path: &str) -> Vec<String> {
         (false, _) => "graphics",
     };
     vec![path.to_owned(), format!("{folder}\\{path}")]
+}
+
+/// Every code in a shipped v5+ level is catalogued, and every catalogued code
+/// has a frame in its sprite sheet.
+#[test]
+fn catalogue_covers_levels_and_sprites() {
+    let mut levels = 0;
+    let mut missing = std::collections::BTreeSet::new();
+    for (game, kind) in [("RTWP", Game::Rtwp), ("WSW", Game::Wsw)] {
+        let Some(assets) = open_game(game) else {
+            continue;
+        };
+        let pack = assets.pack().unwrap();
+        for entry in pack.index().entries() {
+            let name = entry.name.to_lowercase();
+            if !LEVEL_EXTENSIONS.iter().any(|e| name.ends_with(e)) {
+                continue;
+            }
+            let level = Level::parse(pack.entry_data(entry), kind).unwrap();
+            if level.version < 5 {
+                continue;
+            }
+            levels += 1;
+            for &code in &level.tiles {
+                if catalogue::find(Layer::Tile, code).is_none() {
+                    missing.insert(("tile", code, entry.name.clone()));
+                }
+            }
+            for &code in level.objects.iter().filter(|&&c| c != 0) {
+                if catalogue::find(Layer::Object, code).is_none() {
+                    missing.insert(("object", code, entry.name.clone()));
+                }
+            }
+        }
+    }
+    assert!(levels > 0, "no v5 levels");
+    assert!(missing.is_empty(), "{levels} levels: {missing:?}");
+
+    let Some(assets) = open_game("RTWP") else {
+        return;
+    };
+    for piece in catalogue::PIECES {
+        for code in piece.base..piece.base + piece.count() {
+            let sprite = catalogue::sprite(piece.layer, code).unwrap();
+            let bmp = assets.read(sprite.sheet).unwrap();
+            let width = u32::from_le_bytes(bmp[18..22].try_into().unwrap());
+            let height = u32::from_le_bytes(bmp[22..26].try_into().unwrap());
+            assert_eq!(height, sprite.size, "{}", sprite.sheet);
+            assert!(
+                (sprite.frame + 1) * sprite.size <= width,
+                "{}: {code}",
+                piece.name
+            );
+        }
+    }
 }
