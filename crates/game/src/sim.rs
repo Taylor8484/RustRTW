@@ -9,6 +9,7 @@ use wonderland_logic::{Clock, Completion, Event, Input, Session, World};
 use crate::flow::Phase;
 use crate::game_menu::GameMenu;
 use crate::level::{GameData, LevelData};
+use crate::pad::{Held, Pad};
 use crate::tow_ending::TowEnding;
 
 /// The level in play.
@@ -98,16 +99,35 @@ impl TickAnim {
 
 /// The keys `UpdateGame` reads: arrows (or the keypad), Shift for the free
 /// camera, Return to switch player.
-pub fn read_input(keys: &ButtonInput<KeyCode>) -> Input {
+pub fn read_input(keys: &ButtonInput<KeyCode>, pad: Held, view3d: bool) -> Input {
     let any = |k: &[KeyCode]| k.iter().any(|&k| keys.pressed(k));
-    Input {
-        up: any(&[KeyCode::ArrowUp, KeyCode::Numpad8]),
-        down: any(&[KeyCode::ArrowDown, KeyCode::Numpad2]),
-        left: any(&[KeyCode::ArrowLeft, KeyCode::Numpad4]),
-        right: any(&[KeyCode::ArrowRight, KeyCode::Numpad6]),
-        camera: any(&[KeyCode::ShiftLeft, KeyCode::ShiftRight]),
-        switch: any(&[KeyCode::Enter, KeyCode::NumpadEnter]),
-    }
+    merge_pad(
+        Input {
+            up: any(&[KeyCode::ArrowUp, KeyCode::Numpad8]),
+            down: any(&[KeyCode::ArrowDown, KeyCode::Numpad2]),
+            left: any(&[KeyCode::ArrowLeft, KeyCode::Numpad4]),
+            right: any(&[KeyCode::ArrowRight, KeyCode::Numpad6]),
+            camera: any(&[KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+            switch: any(&[KeyCode::Enter, KeyCode::NumpadEnter]),
+        },
+        pad,
+        view3d,
+    )
+}
+
+/// Adds the controllers to the keys. The right stick is Shift and the
+/// arrows, which in a 3D level would walk: the free camera is top-down only.
+fn merge_pad(mut input: Input, pad: Held, view3d: bool) -> Input {
+    let look = pad.look();
+    let looking = !view3d && look != Held::default();
+    let moving = if looking { look } else { pad };
+    input.up |= moving.has(Held::UP);
+    input.down |= moving.has(Held::DOWN);
+    input.left |= moving.has(Held::LEFT);
+    input.right |= moving.has(Held::RIGHT);
+    input.camera |= looking;
+    input.switch |= pad.has(Held::SWITCH);
+    input
 }
 
 /// Runs in `Update` before anything that reads the world.
@@ -131,11 +151,12 @@ fn step(
     mut sim: ResMut<Sim>,
     mut anim: ResMut<TickAnim>,
     keys: Res<ButtonInput<KeyCode>>,
+    pad: Res<Pad>,
     time: Res<Time<Real>>,
     data: Res<GameData>,
 ) {
     let frame = sim.clock.advance(now_ms(&time));
-    let input = read_input(&keys);
+    let input = read_input(&keys, pad.held, sim.world.level.view3d);
     sim.events.clear();
     // `MenuLoop5` keeps the clock going but runs no ticks.
     sim.ticks = if sim.menu.is_some() { 0 } else { frame.ticks };

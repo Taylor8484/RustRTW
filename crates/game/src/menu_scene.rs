@@ -44,6 +44,7 @@ use crate::menu::{Action, LevelCursor, MAIN, Menu, MenuKeys, Selector, Square, e
 use crate::model::{Geometry, cylinder_segments, flip, sphere_segments};
 use crate::music::{MusicRequest, extra_track, world_track};
 use crate::objects::vertex_colour;
+use crate::pad::{Held, Pad};
 use crate::particles::frame;
 use crate::scene::TextureCache;
 use crate::sim::Sim;
@@ -183,27 +184,30 @@ fn level_titles(data: &GameData, worlds: &Worlds) -> Vec<String> {
         .collect()
 }
 
-/// The menu keys held now.
-pub(crate) fn read_keys(keys: &ButtonInput<KeyCode>) -> MenuKeys {
+/// The menu keys held now, with the controllers'. Start is Esc only in
+/// play, where it opens and closes the in-game menu.
+pub(crate) fn read_keys(keys: &ButtonInput<KeyCode>, pad: Held, in_play: bool) -> MenuKeys {
     let any = |k: &[KeyCode]| k.iter().any(|&k| keys.pressed(k));
     MenuKeys {
-        up: any(&[KeyCode::ArrowUp, KeyCode::Numpad8]),
-        down: any(&[KeyCode::ArrowDown, KeyCode::Numpad2]),
-        left: any(&[KeyCode::ArrowLeft, KeyCode::Numpad4]),
-        right: any(&[KeyCode::ArrowRight, KeyCode::Numpad6]),
-        enter: any(&[KeyCode::Enter, KeyCode::NumpadEnter]),
-        escape: keys.pressed(KeyCode::Escape),
+        up: any(&[KeyCode::ArrowUp, KeyCode::Numpad8]) || pad.has(Held::UP),
+        down: any(&[KeyCode::ArrowDown, KeyCode::Numpad2]) || pad.has(Held::DOWN),
+        left: any(&[KeyCode::ArrowLeft, KeyCode::Numpad4]) || pad.has(Held::LEFT),
+        right: any(&[KeyCode::ArrowRight, KeyCode::Numpad6]) || pad.has(Held::RIGHT),
+        enter: any(&[KeyCode::Enter, KeyCode::NumpadEnter]) || pad.has(Held::CONFIRM),
+        escape: keys.pressed(KeyCode::Escape)
+            || pad.has(Held::BACK)
+            || (in_play && pad.has(Held::MENU)),
         space: keys.pressed(KeyCode::Space),
         one: keys.pressed(KeyCode::Digit1),
         two: keys.pressed(KeyCode::Digit2),
         three: keys.pressed(KeyCode::Digit3),
         zero: keys.pressed(KeyCode::Digit0),
-        delete: keys.pressed(KeyCode::Delete),
+        delete: keys.pressed(KeyCode::Delete) || pad.has(Held::DELETE),
         backspace: keys.pressed(KeyCode::Backspace),
-        page_up: keys.pressed(KeyCode::PageUp),
-        page_down: keys.pressed(KeyCode::PageDown),
-        f1: keys.pressed(KeyCode::F1),
-        f2: keys.pressed(KeyCode::F2),
+        page_up: keys.pressed(KeyCode::PageUp) || pad.has(Held::PAGE_UP),
+        page_down: keys.pressed(KeyCode::PageDown) || pad.has(Held::PAGE_DOWN),
+        f1: keys.pressed(KeyCode::F1) || pad.has(Held::SORT_NAME),
+        f2: keys.pressed(KeyCode::F2) || pad.has(Held::SORT_FILE),
     }
 }
 
@@ -305,6 +309,7 @@ fn menu_frame(
     mut state: ResMut<MenuState>,
     mut data: ResMut<GameData>,
     keys: Res<ButtonInput<KeyCode>>,
+    pad: Res<Pad>,
     mut typed: MessageReader<KeyboardInput>,
     time: Res<Time<Real>>,
     mut screen: ResMut<Screen>,
@@ -326,10 +331,12 @@ fn menu_frame(
         }
     }
     st.menu.millisecs = now as i32;
+    st.menu.device = pad.device;
     let actions = if st.quitting.is_some() {
         Vec::new()
     } else {
-        st.menu.frame(read_keys(&keys), ticks, &mut data.config)
+        st.menu
+            .frame(read_keys(&keys, pad.held, false), ticks, &mut data.config)
     };
     for a in actions {
         match a {

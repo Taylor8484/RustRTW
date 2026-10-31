@@ -169,9 +169,10 @@ Renders and animates the `logic` state and plays audio. Bevy's version is
 pinned and upgraded deliberately.
 
 - **Bevy 0.20.0**, pinned with `=`, default features off: only the 3D
-  renderer, window, keyboard, UI text and WAV sound. Its minimum Rust
+  renderer, window, keyboard, controllers, UI text and WAV sound. Its minimum Rust
   (1.97.1) is the workspace's. Building `bevy_audio` on Linux needs the
-  ALSA headers (`libasound2-dev`). Textures are decoded with `image`
+  ALSA headers (`libasound2-dev`), and controllers need udev's
+  (`libudev-dev`). Textures are decoded with `image`
   (BMP/JPEG), not Bevy's loaders.
 - **Run:** `wonderland [--assets <dir>] [--level <name>] [--windowed]
   [--pillarbox] [--backend dx12|vulkan|gl]` starts RTWP at its title screen, or with
@@ -294,12 +295,28 @@ pinned and upgraded deliberately.
   `MenuSetup` turns on linear fog (90–128) and nothing turns it off, so
   the camera keeps it in play too, in the colour the menus left.
   Options are written back to `options.cfg` in the game folder.
+- **Controllers:** the original has none, so nothing here is compared
+  with it, and `logic` never hears of them. `pad` turns any controller
+  into `Held` bits (stick past half way, stronger axis only) that
+  `read_input` and `read_keys` add to the keys. The right stick is
+  Shift plus arrows, top-down only, since Shift in a 3D level would walk.
+  Start is Esc only in play. `Pad` tracks the device last used (USB ids
+  give Xbox, PS3, PS4, PS5 or Nintendo; others show as Xbox; a connection
+  counts as use). On Nintendo A and B swap. Prompts carry an icon as a
+  control character in the text, over two columns, so layouts need no
+  change: `menu_prompt` swaps the menus' key names and `sign_prompt` the
+  shipped levels' signs (the level text itself is untouched). The icons
+  in `crates/game/prompts` are Kenney's Input Prompts (CC0). With a
+  controller the new-player screen shows a letter picker. A controller
+  is ignored while the window is not in front.
 - **Checking without a display:** `WL_SCREENSHOT=out.png[,frames]` saves
   a frame and quits; with `WL_HEADLESS=1` there is no window and the
   camera draws into a 1024x768 image (`WL_HEADLESS_SIZE=<w>x<h>` for
   another size). `WL_MENU=<ticks>[,<menu>]` starts
   the menus with `MenuTimer` at `ticks` (and in menu `menu`);
-  `WL_PLAYER=<name>` loads that player first (for menu 4). On the
+  `WL_PLAYER=<name>` loads that player first (for menu 4);
+  `WL_DEVICE=xbox|ps3|ps4|ps5|nintendo` starts on that controller's
+  prompts. On the
   software renderer new materials take over 100 frames to compile, so
   use 150 frames or more. WSLg could not present a window
   here (Wayland dropped the connection, GL had no present mode).

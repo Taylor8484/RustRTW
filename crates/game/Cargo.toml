@@ -12,7 +12,7 @@ name = "wonderland"
 path = "src/main.rs"
 
 [dependencies]
-# Only what the games use: 3D meshes, a window, the keyboard, UI text for
+# Only what the games use: 3D meshes, a window, the keyboard, controllers, UI text for
 # the HUD and WAV sound. Building `bevy_audio` on Linux needs the ALSA
 # headers (`libasound2-dev`). Textures
 # (BMP/JPEG) are decoded with `image` here, so Bevy's image formats stay
@@ -29,6 +29,8 @@ bevy = { version = "=0.20.0", default-features = false, features = [
     "x11",
     "wayland",
     "keyboard",
+    "gamepad",
+    "bevy_gilrs",
     "bevy_window",
     "bevy_render",
     "bevy_core_pipeline",

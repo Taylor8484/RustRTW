@@ -31,6 +31,7 @@ use wonderland_formats::config::Options as ConfigOptions;
 
 use crate::ending::EndScene;
 use crate::hud::{Edge, Letter, display_text, pinned};
+use crate::pad::{Device, menu_prompt};
 
 pub const TITLE: i32 = 0;
 pub const MAIN: i32 = 1;
@@ -193,6 +194,42 @@ fn back_text(language: i32) -> [&'static str; 2] {
             "Tape 'Entree' pour revenir en arriere.",
         ],
         _ => ["Gateway is Open", "Press 'Enter' to Travel Back"],
+    }
+}
+
+/// The letter picker's cells, row by row; the one after them is OK.
+const PICKER_LETTERS: &[u8; 27] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ ";
+const PICKER_COLUMNS: usize = 9;
+const PICKER_ROWS: usize = 3;
+const PICKER_OK: usize = PICKER_LETTERS.len();
+/// The first letter's column and row, on `DisplayText`'s grid.
+const PICKER_LEFT: f32 = 12.0;
+const PICKER_TOP: f32 = 10.0;
+
+/// The cell a direction leads to from `cell`, wrapping round. OK is below
+/// every column, and comes back to the row above in the middle.
+fn picker_step(cell: usize, keys: MenuKeys) -> usize {
+    let rows = PICKER_ROWS as i32 + 1;
+    let columns = PICKER_COLUMNS as i32;
+    let (mut row, mut column) = if cell == PICKER_OK {
+        (PICKER_ROWS as i32, columns / 2)
+    } else {
+        (
+            (cell / PICKER_COLUMNS) as i32,
+            (cell % PICKER_COLUMNS) as i32,
+        )
+    };
+    if keys.up {
+        row = (row + rows - 1) % rows;
+    } else if keys.down {
+        row = (row + 1) % rows;
+    } else if row < PICKER_ROWS as i32 {
+        column = (column + if keys.left { columns - 1 } else { 1 }) % columns;
+    }
+    if row == PICKER_ROWS as i32 {
+        PICKER_OK
+    } else {
+        (row * columns + column) as usize
     }
 }
 
@@ -482,6 +519,10 @@ pub struct Menu {
     pub player_name: String,
     /// What `GetKey` returns: the characters typed, one taken per frame.
     typed: VecDeque<u8>,
+    /// What the player last used: the prompts and the name entry follow it.
+    pub device: Device,
+    /// The letter picker's cell on the new-player screen.
+    picker: usize,
     /// `MilliSecs()`, for a new player's id.
     pub millisecs: i32,
     /// The player chosen or created. Its `world` is `CurrentWorld`.
@@ -553,6 +594,8 @@ impl Default for Menu {
             to_delete: 0,
             player_name: String::new(),
             typed: VecDeque::new(),
+            device: Device::Keyboard,
+            picker: 0,
             millisecs: 0,
             profile: None,
             level: 0,
@@ -622,6 +665,7 @@ impl Menu {
         } else if menu == NEW_PLAYER {
             self.actions.push(Action::StopMusic);
             self.player_name.clear();
+            self.picker = 0;
             // `GetKey`'s queue holds every key typed since the game
             // started; only what is typed on this screen counts here.
             self.typed.clear();
@@ -867,7 +911,8 @@ impl Menu {
             tx.center("", 9.0, 1.0, 56);
             tx.center("", 9.0, 1.0, 57);
         } else {
-            tx.center("(Press Space Key To Start)", 16.0, 1.0, 57);
+            let start = menu_prompt("(Press Space Key To Start)", self.device);
+            tx.center(&start, 16.0, 1.0, 57);
         }
 
         // Fade in and out: before 0 for the opening line, then a second
@@ -954,7 +999,8 @@ impl Menu {
             self.text.center(item, 9.0 + i as f32, 1.0, 51 + i as i32);
         }
         if self.level_timer % 200 < 100 {
-            self.text.center(hint, 17.0, 1.0, 57);
+            let hint = menu_prompt(hint, self.device);
+            self.text.center(&hint, 17.0, 1.0, 57);
         } else {
             self.text.center("", 17.0, 1.0, 57);
         }
@@ -1747,7 +1793,7 @@ impl Menu {
                         _ => ("Not Completed Yet", "Press 'Enter' to try this Level."),
                     };
                     tx.center(a, 13.0, 1.0, 58);
-                    tx.center(b, 14.0, 1.0, 59);
+                    tx.center(&menu_prompt(b, self.device), 14.0, 1.0, 59);
                 } else {
                     tx.display("", 0.0, 0.0, 1.0, 58);
                     tx.display("", 0.0, 0.0, 1.0, 59);
@@ -1757,7 +1803,11 @@ impl Menu {
                     2 => ("Utilise les fleches pour choisir les niveaux.", 3.0),
                     _ => ("Use Cursor Keys to select different Levels.", 4.0),
                 };
-                tx.display(hint, x, 18.0, 1.0, 60);
+                if self.device.is_pad() {
+                    tx.center(&menu_prompt(hint, self.device), 18.0, 1.0, 60);
+                } else {
+                    tx.display(hint, x, 18.0, 1.0, 60);
+                }
             } else {
                 let (done, word, hint, x) = match lang {
                     1 => (
@@ -1999,9 +2049,9 @@ impl Menu {
                 "Levels can be replayed anytime.",
             ),
         };
-        tx.center(enter, 14.0, 1.0, 59);
+        tx.center(&menu_prompt(enter, self.device), 14.0, 1.0, 59);
         // Both lines share a tag, so only the second stays.
-        tx.center(cursor_keys, 17.0, 1.0, 60);
+        tx.center(&menu_prompt(cursor_keys, self.device), 17.0, 1.0, 60);
         tx.center(replay, 18.0, 1.0, 60);
         if let Some(c) = &mut self.cursor {
             (c.x, c.y) = cursor;
@@ -2106,19 +2156,32 @@ impl Menu {
         let cursor = if self.level_timer % 50 < 25 { ":" } else { " " };
         let x = 25.0 + self.player_name.len() as f32 / 2.0;
         tx.display(cursor, x, 7.0, 1.0, 53);
+        if self.device.is_pad() {
+            self.show_picker();
+        } else {
+            for tag in 54..=58 {
+                self.text.display("", 0.0, 0.0, 1.0, tag);
+            }
+        }
         // Moved above the top of the screen, out of sight.
-        let half_width = self.selector_at.map_or(25.0 * 0.012, |s| s.half_width);
-        self.selector_at = Some(Selector {
-            x: -0.5 + 24.4 * 0.02 + 0.01,
-            y: 0.375 - (-2.0) * 0.04 - 0.013,
-            z: 1.001,
-            half_width,
-        });
+        if !self.device.is_pad() {
+            let half_width = self.selector_at.map_or(25.0 * 0.012, |s| s.half_width);
+            self.selector_at = Some(Selector {
+                x: -0.5 + 24.4 * 0.02 + 0.01,
+                y: 0.375 - (-2.0) * 0.04 - 0.013,
+                z: 1.001,
+                half_width,
+            });
+        }
         self.update_selector();
         self.text.activate(|| None);
 
         self.run_ticks(ticks, false);
 
+        if self.device.is_pad() {
+            self.pick(keys);
+            return;
+        }
         let mut key = self.typed.pop_front().map_or(0, i32::from);
         if key >= 97 {
             key -= 32;
@@ -2142,16 +2205,7 @@ impl Menu {
             }
         } else if keys.enter {
             if self.cursor_key == 0 {
-                self.actions.push(Action::Sound(MenuSound::LastCoin));
-                let profile = Profile::new(&self.player_name, self.millisecs);
-                if let Some(Err(e)) = self.players.as_ref().map(|p| p.create(&profile)) {
-                    self.actions
-                        .push(Action::Warn(format!("{}: {e}", profile.name)));
-                }
-                self.profile = Some(profile);
-                self.cursor_key = 1;
-                self.end();
-                self.start(LEVEL_PACKS);
+                self.create_player();
             }
         } else if keys.escape {
             if self.cursor_key == 0 {
@@ -2159,6 +2213,90 @@ impl Menu {
                 self.end();
                 // With no players this comes straight back here.
                 self.start(PLAYER_SELECT);
+            }
+        } else {
+            self.cursor_key = 0;
+        }
+    }
+
+    /// Makes the player named, and on to the level packs.
+    fn create_player(&mut self) {
+        self.actions.push(Action::Sound(MenuSound::LastCoin));
+        let profile = Profile::new(&self.player_name, self.millisecs);
+        if let Some(Err(e)) = self.players.as_ref().map(|p| p.create(&profile)) {
+            self.actions
+                .push(Action::Warn(format!("{}: {e}", profile.name)));
+        }
+        self.profile = Some(profile);
+        self.cursor_key = 1;
+        self.end();
+        self.start(LEVEL_PACKS);
+    }
+
+    /// The letter picker: rows of letters and a blank, then OK.
+    fn show_picker(&mut self) {
+        let lang = self.language;
+        for row in 0..PICKER_ROWS {
+            let line: String = (0..PICKER_COLUMNS)
+                .map(|c| PICKER_LETTERS[row * PICKER_COLUMNS + c] as char)
+                .flat_map(|c| [c, ' ', ' '])
+                .collect();
+            let y = PICKER_TOP + row as f32;
+            self.text
+                .display(&line, PICKER_LEFT, y, 1.0, 54 + row as i32);
+        }
+        let ok_row = PICKER_TOP + PICKER_ROWS as f32;
+        self.text.center("OK", ok_row, 1.0, 57);
+        let hint = match lang {
+            1 => "\x02  Buchstabe loeschen oder zurueck",
+            2 => "\x02  Efface une lettre ou revient",
+            _ => "\x02  Deletes a Letter or Goes Back",
+        };
+        self.text.center(hint, ok_row + 2.0, 1.0, 58);
+        let (x, row, half_width) = if self.picker == PICKER_OK {
+            (25.0, ok_row, 0.03)
+        } else {
+            let (row, column) = (self.picker / PICKER_COLUMNS, self.picker % PICKER_COLUMNS);
+            let x = PICKER_LEFT + 0.5 + (column * 3) as f32;
+            (x, PICKER_TOP + row as f32, 0.018)
+        };
+        self.selector_at = Some(Selector {
+            x: (x - 25.0) * 0.022,
+            half_width,
+            ..Selector::at_row(row as i32, 1.0)
+        });
+    }
+
+    /// The controller's keys on the letter picker.
+    fn pick(&mut self, keys: MenuKeys) {
+        if keys.up || keys.down || keys.left || keys.right {
+            if self.cursor_key == 0 {
+                self.picker = picker_step(self.picker, keys);
+                self.actions.push(Action::Sound(MenuSound::Move));
+                self.cursor_key = 1;
+            }
+        } else if keys.enter {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                if self.picker == PICKER_OK {
+                    // A name is needed, unlike at the keyboard's Enter.
+                    if !self.player_name.is_empty() {
+                        self.create_player();
+                    }
+                } else if self.player_name.len() < 15 {
+                    self.actions.push(Action::Sound(MenuSound::Type));
+                    self.player_name.push(PICKER_LETTERS[self.picker] as char);
+                }
+            }
+        } else if keys.escape {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                if self.player_name.pop().is_some() {
+                    self.actions.push(Action::Sound(MenuSound::Type));
+                } else {
+                    self.end();
+                    self.start(PLAYER_SELECT);
+                }
             }
         } else {
             self.cursor_key = 0;
@@ -2854,6 +2992,71 @@ mod tests {
             m.frame(KEYS, 1, o);
             m.frame(KEYS, 1, o);
         }
+    }
+
+    #[test]
+    fn a_controller_picks_a_name() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let (mut m, dir) = players_menu("picker");
+        m.device = Device::Xbox;
+        press(&mut m, &mut o, ENTER);
+        assert_eq!(m.current, NEW_PLAYER);
+        press(&mut m, &mut o, KEYS);
+        assert!(text(&m).contains("A  B  C"));
+        // OK with no name does nothing.
+        press(&mut m, &mut o, UP);
+        press(&mut m, &mut o, ENTER);
+        assert_eq!(m.current, NEW_PLAYER);
+        // Down wraps to the middle of the top row, E; then F, picked twice.
+        press(&mut m, &mut o, DOWN);
+        press(&mut m, &mut o, ENTER);
+        let right = MenuKeys {
+            right: true,
+            ..KEYS
+        };
+        press(&mut m, &mut o, right);
+        press(&mut m, &mut o, ENTER);
+        press(&mut m, &mut o, ENTER);
+        assert_eq!(m.player_name, "EFF");
+        // Back takes a letter off.
+        press(&mut m, &mut o, ESCAPE);
+        assert_eq!(m.player_name, "EF");
+        press(&mut m, &mut o, UP);
+        press(&mut m, &mut o, ENTER);
+        assert_eq!(m.current, LEVEL_PACKS);
+        assert_eq!(m.profile.as_ref().unwrap().name, "EF");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn picker_steps_wrap_round() {
+        let keys = |f: fn(&mut MenuKeys)| {
+            let mut k = MenuKeys::default();
+            f(&mut k);
+            k
+        };
+        let left = keys(|k| k.left = true);
+        let right = keys(|k| k.right = true);
+        let (up, down) = (keys(|k| k.up = true), keys(|k| k.down = true));
+        assert_eq!(picker_step(0, left), 8);
+        assert_eq!(picker_step(8, right), 0);
+        assert_eq!(picker_step(0, up), PICKER_OK);
+        assert_eq!(picker_step(26, down), PICKER_OK);
+        assert_eq!(picker_step(PICKER_OK, up), 22);
+        assert_eq!(picker_step(PICKER_OK, down), 4);
+        assert_eq!(picker_step(PICKER_OK, left), PICKER_OK);
+    }
+
+    #[test]
+    fn the_prompts_follow_the_device() {
+        let mut m = Menu::new();
+        m.start(MAIN);
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        press(&mut m, &mut o, KEYS);
+        assert!(text(&m).contains("Use Cursor Keys"));
+        m.device = Device::Ps5;
+        press(&mut m, &mut o, KEYS);
+        assert!(text(&m).contains("Use \x03  and \x01  to Select"));
     }
 
     #[test]

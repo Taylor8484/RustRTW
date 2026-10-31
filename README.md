@@ -53,6 +53,25 @@ The game names any missing files at startup. On Windows it writes them to
 | Shift + arrow keys | Look around |
 | Esc | In-game menu |
 
+A controller also works, with any one driving the current character. Prompts
+and tutorial signs follow the device last used.
+
+| Action | Xbox | PlayStation | Nintendo |
+|---|---|---|---|
+| Move | D-pad or left stick | D-pad or left stick | D-pad or left stick |
+| Look around | Right stick | Right stick | Right stick |
+| Switch between players | Y | Triangle | X |
+| Confirm | A | Cross | A |
+| Back | B | Circle | B |
+| In-game menu | Start | Options | + |
+| Delete a player | X | Square | Y |
+| Custom level pages | LB, RB | L1, R1 | L, R |
+| Custom level sort | LT, RT | L2, R2 | ZL, ZR |
+
+Only Xbox controllers have been tried so far. PlayStation and Nintendo
+controllers are untested, so reports are welcome. The classic ending's 1-2-3
+and the secret song stay on the keyboard.
+
 | Option | Effect |
 |---|---|
 | `--windowed` | Stay in a window |
@@ -127,3 +146,5 @@ Original game by Patrick Maidorn and
 "Purple Motion" Valtonen, and additional 3D modeling by Danny Hawrysio. Thanks
 to the Wonderland community and
 [The Wonderland Team](https://github.com/The-Wonderland-Team) for OpenRTW.
+Controller icons are [Input Prompts](https://kenney.nl/assets/input-prompts) by
+Kenney (CC0).

@@ -41,6 +41,7 @@ use crate::level::{GameData, LevelData};
 use crate::menu::{CUSTOM_LEVELS, MAIN, Menu, MenuSound};
 use crate::menu_scene::{MenuState, read_keys};
 use crate::objects::clear_pools;
+use crate::pad::{Held, Pad};
 use crate::scene::{LevelEntity, spawn_level};
 use crate::sim::{Sim, SimStep};
 
@@ -259,6 +260,7 @@ fn finish_level(
 /// Esc during play (`StartMenu(5)`), and `MenuLoop5` while it is open.
 fn game_menu(
     keys: Res<ButtonInput<KeyCode>>,
+    pad: Res<Pad>,
     mut sim: ResMut<Sim>,
     mut menu: ResMut<MenuState>,
     playlist: Option<Res<Playlist>>,
@@ -266,7 +268,7 @@ fn game_menu(
     mut sounds: ResMut<MenuSounds>,
 ) {
     if let Some(ending) = &mut sim.ending {
-        if ending.leave(read_keys(&keys)) {
+        if ending.leave(read_keys(&keys, pad.held, true)) {
             sim.ending = None;
             menu.menu.hold_keys();
             menu.menu.end();
@@ -276,7 +278,7 @@ fn game_menu(
         return;
     }
     let Some(open) = &mut sim.menu else {
-        if keys.just_pressed(KeyCode::Escape)
+        if (keys.just_pressed(KeyCode::Escape) || pad.pressed.has(Held::MENU))
             && !matches!(sim.world.completion, Completion::Done | Completion::Restart)
         {
             sounds.0.push(MenuSound::Move);
@@ -285,7 +287,7 @@ fn game_menu(
         }
         return;
     };
-    let (moved, choice) = open.frame(read_keys(&keys), menu.menu.language);
+    let (moved, choice) = open.frame(read_keys(&keys, pad.held, true), menu.menu.language);
     if moved {
         sounds.0.push(MenuSound::Move);
     }

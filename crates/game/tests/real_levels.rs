@@ -5,8 +5,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use wonderland_campaign::worlds::Content;
 use wonderland_game::level::GameData;
 use wonderland_game::level_mesh::{Tex, construct_background, construct_level};
+use wonderland_game::pad::{Device, sign_prompt};
 use wonderland_game::style::{effective_background, effective_style, level_textures};
 use wonderland_game::texture;
 
@@ -144,5 +146,28 @@ fn every_tow_level_in_the_table_loads() {
     // TOW's worlds play modules RTWP ships too.
     for w in 30..=40 {
         assert!(data.assets.exists(world_track(w).file));
+    }
+}
+
+#[test]
+fn no_sign_names_a_key_on_a_controller() {
+    let Some(dir) = assets_dir() else {
+        eprintln!("skipping: no RTWP assets");
+        return;
+    };
+    let data = GameData::open(&dir).unwrap();
+    for content in [Content::Rtwp, Content::Tow] {
+        if content == Content::Tow && data.tow.is_none() {
+            continue;
+        }
+        for name in data.level_names(content) {
+            let level = data.load_content_level(content, &name).unwrap();
+            for sign in &level.setup.signs {
+                let text = sign_prompt(&sign.text, Device::Xbox);
+                for word in ["Key", " key", "Shift", " Esc ", "'Esc'", "Arrow", "Cursor"] {
+                    assert!(!text.contains(word), "{name}: {text}");
+                }
+            }
+        }
     }
 }

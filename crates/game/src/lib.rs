@@ -47,6 +47,7 @@ pub mod menu_scene;
 pub mod model;
 pub mod music;
 pub mod objects;
+pub mod pad;
 pub mod particles;
 pub mod scene;
 pub mod shot;
@@ -63,6 +64,7 @@ pub struct GamePlugins;
 impl Plugin for GamePlugins {
     fn build(&self, app: &mut App) {
         app.add_plugins((
+            pad::PadPlugin,
             sim::SimPlugin,
             scene::ScenePlugin,
             camera::CameraPlugin,

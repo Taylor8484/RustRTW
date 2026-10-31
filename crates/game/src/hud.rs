@@ -10,7 +10,11 @@
 //! The game and the menus both fill [`Screen`]: the menus add their
 //! selector bar and logos as [`ScreenImage`]s, drawn under the letters.
 
+use std::collections::HashMap;
+
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 use wonderland_logic::World;
 use wonderland_logic::sign::LEVEL_NAME;
@@ -18,6 +22,7 @@ use wonderland_logic::sign::LEVEL_NAME;
 use crate::camera::GameCamera;
 use crate::flow::Phase;
 use crate::level::GameData;
+use crate::pad::{Device, Icon, Pad, icon_png, sign_prompt};
 use crate::scene::TextureCache;
 use crate::shot::{headless, headless_size};
 use crate::sim::{Sim, SimStep};
@@ -163,7 +168,7 @@ pub fn level_name_alpha(level_timer: i32) -> f32 {
 }
 
 /// Every letter on screen: the signs, then the HUD.
-pub fn all_letters(w: &World) -> Vec<Letter> {
+pub fn all_letters(w: &World, device: Device) -> Vec<Letter> {
     let mut out = Vec::new();
     for s in w.signs_shown() {
         let alpha = if s.tag == LEVEL_NAME {
@@ -171,7 +176,7 @@ pub fn all_letters(w: &World) -> Vec<Letter> {
         } else {
             s.alpha
         };
-        out.extend(sign_layout(&s.text, s.y, alpha));
+        out.extend(sign_layout(&sign_prompt(&s.text, device), s.y, alpha));
     }
     out.extend(hud_letters(w));
     out
@@ -221,6 +226,8 @@ struct Drawn {
     screen: Screen,
     size: Vec2,
     fonts: Vec<Handle<Image>>,
+    device: Device,
+    icons: HashMap<(Device, Icon), Handle<Image>>,
 }
 
 /// Runs after the game or the menus have filled [`Screen`].
@@ -247,11 +254,11 @@ impl Plugin for HudPlugin {
     }
 }
 
-fn game_screen(sim: Res<Sim>, mut screen: ResMut<Screen>) {
+fn game_screen(sim: Res<Sim>, pad: Res<Pad>, mut screen: ResMut<Screen>) {
     screen.images.clear();
     screen.letters = match &sim.ending {
         Some(e) => e.text.shown(),
-        None => all_letters(&sim.world),
+        None => all_letters(&sim.world, pad.device),
     };
     if let Some(menu) = &sim.menu {
         screen.letters.extend(menu.text.shown());
@@ -270,10 +277,38 @@ fn spawn_root(mut commands: Commands) {
     ));
 }
 
+/// The picture of `icon` on `device`, decoded the first time it is shown.
+fn icon_handle(
+    device: Device,
+    icon: Icon,
+    drawn: &mut Drawn,
+    images: &mut Assets<Image>,
+) -> Option<Handle<Image>> {
+    if let Some(handle) = drawn.icons.get(&(device, icon)) {
+        return Some(handle.clone());
+    }
+    let png = image::load_from_memory(icon_png(device, icon)?).ok()?;
+    let image = Image::new(
+        Extent3d {
+            width: png.width(),
+            height: png.height(),
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        png.into_rgba8().into_raw(),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    let handle = images.add(image);
+    drawn.icons.insert((device, icon), handle.clone());
+    Some(handle)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_screen(
     mut commands: Commands,
     screen: Res<Screen>,
+    pad: Res<Pad>,
     data: Res<GameData>,
     mut drawn: ResMut<Drawn>,
     mut cache: ResMut<TextureCache>,
@@ -296,7 +331,7 @@ fn draw_screen(
         }
         _ => return,
     };
-    if *screen == drawn.screen && size == drawn.size {
+    if *screen == drawn.screen && size == drawn.size && pad.device == drawn.device {
         return;
     }
     let Ok((root, targeted)) = root.single() else {
@@ -338,6 +373,7 @@ fn draw_screen(
             (handle, px, i)
         })
         .collect();
+    let icons = Icon::ALL.map(|icon| icon_handle(pad.device, icon, &mut drawn, &mut images));
     commands.entity(root).with_children(|ui| {
         for (handle, px, i) in pictures {
             let [l, t, r, b] = i.rect;
@@ -362,7 +398,29 @@ fn draw_screen(
                 Glyph,
             ));
         }
+        let node = |x: f32, y: f32, width: f32, l: &Letter| Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(
+                match l.edge {
+                    Edge::Grid => left,
+                    Edge::Left => 0.0,
+                    Edge::Right => 2.0 * left,
+                } + x * cell,
+            ),
+            top: Val::Px(top + y * cell * 2.0),
+            width: Val::Px(width),
+            height: Val::Px(cell * 2.0),
+            ..default()
+        };
         for l in &screen.letters {
+            if let Some(icon) = Icon::from_byte(l.ascii) {
+                if let Some(handle) = &icons[icon as usize - 1] {
+                    let mut image = ImageNode::new(handle.clone());
+                    image.color = Color::srgba(1.0, 1.0, 1.0, l.alpha);
+                    ui.spawn((image, node(l.x, l.y, cell * 2.0, l), Glyph));
+                }
+                continue;
+            }
             if l.ascii <= b' ' {
                 continue;
             }
@@ -374,26 +432,10 @@ fn draw_screen(
             let mut image = ImageNode::new(font.clone());
             image.rect = Some(Rect::new(f * 16.0, 0.0, f * 16.0 + 16.0, 32.0));
             image.color = Color::srgba(1.0, 1.0, 1.0, l.alpha);
-            ui.spawn((
-                image,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(
-                        match l.edge {
-                            Edge::Grid => left,
-                            Edge::Left => 0.0,
-                            Edge::Right => 2.0 * left,
-                        } + l.x * cell,
-                    ),
-                    top: Val::Px(top + l.y * cell * 2.0),
-                    width: Val::Px(cell),
-                    height: Val::Px(cell * 2.0),
-                    ..default()
-                },
-                Glyph,
-            ));
+            ui.spawn((image, node(l.x, l.y, cell, l), Glyph));
         }
     });
+    drawn.device = pad.device;
     drawn.screen = screen.clone();
     drawn.size = size;
 }
