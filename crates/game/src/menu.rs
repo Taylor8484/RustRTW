@@ -925,7 +925,6 @@ impl Menu {
                     "OPTIONEN",
                     "ONLINE HILFE",
                     "ONLINE FORUM",
-                    "LEVEL EDITOR",
                     "SPIEL BEENDEN",
                 ],
                 "Benutze die Pfeiltasten und zur Auswahl 'Enter'",
@@ -936,7 +935,6 @@ impl Menu {
                     "OPTIONS",
                     "SOLUCES EN LIGNE",
                     "FORUM EN LIGNE",
-                    "LEVEL EDITOR",
                     "SORTIE VERS WINDOWS",
                 ],
                 "Pour choisir, utilise les fleches et 'Entree'",
@@ -947,7 +945,6 @@ impl Menu {
                     "OPTIONS",
                     "ONLINE SOLUTIONS",
                     "LEVEL EXCHANGE",
-                    "LEVEL EDITOR",
                     "EXIT TO WINDOWS",
                 ],
                 "Use Cursor Keys and Enter to Select",
@@ -966,7 +963,7 @@ impl Menu {
 
         self.run_ticks(ticks, false);
 
-        match self.navigate(keys, 6) {
+        match self.navigate(keys, 5) {
             Some(Press::Enter) => match self.option {
                 0 => {
                     self.end();
@@ -981,9 +978,6 @@ impl Menu {
                     self.version_no1 = if self.option == 2 { -999 } else { -998 };
                     self.start(ONLINE);
                 }
-                // The original quits and runs the level editor, which is
-                // not ported yet (step 8).
-                4 => {}
                 _ => {
                     self.end();
                     self.start(EXIT);
@@ -2695,7 +2689,7 @@ mod tests {
         m.start(MAIN);
         assert!(m.frame(KEYS, 0, &mut o).contains(&Action::Entered(MAIN)));
         let a = press(&mut m, &mut o, MenuKeys { up: true, ..KEYS });
-        assert_eq!(m.option, 5);
+        assert_eq!(m.option, 4);
         assert_eq!(a, vec![Action::Sound(MenuSound::Move)]);
         // Held down for several frames still moves once.
         for _ in 0..5 {

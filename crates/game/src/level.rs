@@ -40,7 +40,8 @@ impl GameData {
         let tow = ["TOW", "tow"]
             .iter()
             .filter_map(|n| dir.parent().map(|p| p.join(n)))
-            .find_map(|d| GameAssets::open(d).ok());
+            .find_map(|d| GameAssets::open(d).ok())
+            .filter(|a| a.pack().is_some());
         let mut data = Self {
             assets,
             tow,
@@ -53,6 +54,16 @@ impl GameData {
         };
         data.apply_config();
         Ok(data)
+    }
+
+    /// The files of RTWP's that are not in the data folder. All of
+    /// `res1.dat` to `res68.dat` but `res11.dat`, which the game never had.
+    pub fn missing_files(&self) -> Vec<String> {
+        (1..=68)
+            .filter(|&n| n != 11)
+            .map(|n| format!("res{n}.dat"))
+            .filter(|f| !self.assets.exists(f))
+            .collect()
     }
 
     /// Takes the settings from [`GameData::config`].
@@ -178,16 +189,39 @@ fn stem(name: &str) -> String {
     file.to_lowercase()
 }
 
-/// The RTWP data folder: `$WL_ASSETS/RTWP`, or `assets/RTWP` under the
-/// current directory.
+/// The RTWP data folder: `$WL_ASSETS/RTWP`, else `assets/RTWP` under the
+/// current directory, else beside the executable, as a release unpacks.
 pub fn default_assets_dir() -> PathBuf {
-    let root = std::env::var_os("WL_ASSETS").map_or_else(|| PathBuf::from("assets"), PathBuf::from);
-    root.join("RTWP")
+    if let Some(root) = std::env::var_os("WL_ASSETS") {
+        return PathBuf::from(root).join("RTWP");
+    }
+    let here = PathBuf::from("assets").join("RTWP");
+    let beside_exe = std::env::current_exe()
+        .ok()
+        .and_then(|e| Some(e.parent()?.join(&here)));
+    match beside_exe {
+        Some(dir) if !here.is_dir() && dir.is_dir() => dir,
+        _ => here,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_data_folder_misses_every_file_and_has_no_tow() {
+        let root = std::env::temp_dir().join(format!("wl-data-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("RTWP")).unwrap();
+        std::fs::create_dir_all(root.join("TOW")).unwrap();
+        let data = GameData::open(&root.join("RTWP")).unwrap();
+        let missing = data.missing_files();
+        assert_eq!(missing.len(), 67);
+        assert_eq!(missing[0], "res1.dat");
+        assert!(!missing.contains(&"res11.dat".to_owned()));
+        assert!(data.tow.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn stems_ignore_folder_extension_and_case() {

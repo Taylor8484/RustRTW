@@ -4,10 +4,13 @@
 //! Starts Return to Wonderland Platinum at its title screen, or with
 //! `--level` straight in that level, going on through the pack's levels
 //! as each is won, with no player and the music of the level's world. The game data is read from `<dir>/RTWP` (default:
-//! `$WL_ASSETS`, else `assets`). The window takes its size and full
+//! `$WL_ASSETS`, else `assets`, else `assets` beside the executable). The window takes its size and full
 //! screen setting from `options.cfg` as the original does; `--windowed`
 //! keeps it in a window. Wide screens show more at the sides;
 //! `--pillarbox` keeps the original's 4:3 picture with black bars.
+
+// No console window behind the game. `fail` covers what it would have shown.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -83,35 +86,50 @@ fn backends(arg: Option<Backends>) -> Backends {
     })
 }
 
+/// Reports why the game cannot start. A release on Windows has no console
+/// to show it, so the message also goes to a file beside the executable.
+fn fail(message: &str) -> ExitCode {
+    eprintln!("{message}");
+    if cfg!(all(windows, not(debug_assertions)))
+        && let Ok(exe) = std::env::current_exe()
+    {
+        let _ = std::fs::write(exe.with_file_name("wonderland-error.txt"), message);
+    }
+    ExitCode::FAILURE
+}
+
 fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(a) => a,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return fail(&e),
     };
     let data = match GameData::open(&args.assets) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("cannot open the game data: {e}");
-            return ExitCode::FAILURE;
+            return fail(&format!(
+                "cannot open the game data: {e}\nASSETS.txt lists the files to copy."
+            ));
         }
     };
+    let missing = data.missing_files();
+    if !missing.is_empty() {
+        return fail(&format!(
+            "{} is missing {} game files: {}\nASSETS.txt lists the files to copy.",
+            args.assets.display(),
+            missing.len(),
+            missing.join(", ")
+        ));
+    }
     // `--level`: straight into play, skipping the menus.
     let start = match &args.level {
         None => None,
         Some(n) => {
             let Some((content, name)) = data.find_level(n) else {
-                eprintln!("no such level: {n}");
-                return ExitCode::FAILURE;
+                return fail(&format!("no such level: {n}"));
             };
             match begin(&data, content, &name, Session::default(), 0, None) {
                 Ok((level, sim)) => Some((level, sim, Playlist::from_pack(&data, content, &name))),
-                Err(e) => {
-                    eprintln!("{e}");
-                    return ExitCode::FAILURE;
-                }
+                Err(e) => return fail(&e),
             }
         }
     };

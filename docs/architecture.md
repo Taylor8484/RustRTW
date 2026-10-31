@@ -178,7 +178,10 @@ pinned and upgraded deliberately.
   `--level` straight in that level, from `<dir>/RTWP`, where `<dir>`
   defaults to `$WL_ASSETS`, else `assets`. TOW's levels are read from
   `<dir>/TOW` when it is there; `--level` looks in TOW's pack for a
-  name RTWP's lacks.
+  name RTWP's lacks. A release ships without game data
+  (`tools/package-release.sh`): `assets` beside the executable is also
+  searched, and the game stops at startup if a file on `ASSETS.txt`
+  is missing.
 - **TOW as content:** a TOW level file is parsed as TOW reads it (v1,
   no map id), then set up and played under `Ruleset::tow()`, RTWP's rules with
   the differences that change a TOW level (`docs/diff-tow.md`)

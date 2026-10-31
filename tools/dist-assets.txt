@@ -1,0 +1,53 @@
+Game files to copy
+==================
+
+This package does not include the game's levels, graphics, music or sound.
+Copy them from your own installed games into the folders below, which are
+beside the wonderland program. Copy the files only; do not rename them.
+
+
+assets/RTWP (required)
+----------------------
+
+From your Return To Wonderland folder:
+
+    res1.dat to res10.dat
+    res12.dat to res68.dat      there is no res11.dat
+
+That is 67 files. The game stops at startup and names any that are missing.
+
+Also copy these if you have them:
+
+    options.cfg                 your settings
+    players                     folder, your player profiles and progress
+    CustomLevels                folder, custom levels
+    CustomHouses                folder, for custom levels
+    CustomModels                folder, for custom levels
+
+
+assets/TOW (optional)
+---------------------
+
+From your Wonderland folder (The Original Wonderland). Without these, the
+Original Levels and The Playground menu lines are not available.
+
+    res1.dat to res22.dat
+    bonus1.lev to bonus5.lev    the bonus levels, if you have them
+
+
+When you are done
+-----------------
+
+    wonderland(.exe)
+    assets/
+        RTWP/
+            res1.dat
+            res2.dat
+            ...
+        TOW/
+            res1.dat
+            res2.dat
+            ...
+
+Settings and player files are saved in assets/RTWP, so that folder must be
+writable.

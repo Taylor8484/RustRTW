@@ -6,3 +6,6 @@
 
 # Rust build output
 /target/
+
+# Release packages (tools/package-release.sh)
+/dist/
