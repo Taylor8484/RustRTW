@@ -4,8 +4,8 @@
 //! This module has no Bevy state, so it is tested headless; `menu_scene`
 //! draws it and carries out the [`Action`]s. Ported so far: the title (0),
 //! the main menu (1), player select (2), new player (3), the level
-//! selector (4), "Confirm Player Deletion?" (6), options (9), "Exit to
-//! Windows?" (10), the endings (12 and 16), the level packs (13), the
+//! selector (4), "Confirm Player Deletion?" (6), options (9), "Exit?" (10),
+//! the endings (12 and 16), the level packs (13), the
 //! custom levels (14) and "Go Online?" (15). The in-game menu (5) is
 //! [`crate::game_menu`].
 //!
@@ -980,7 +980,7 @@ impl Menu {
                     "OPTIONS",
                     "SOLUCES EN LIGNE",
                     "FORUM EN LIGNE",
-                    "SORTIE VERS WINDOWS",
+                    "SORTIE",
                 ],
                 "Pour choisir, utilise les fleches et 'Entree'",
             ),
@@ -990,7 +990,7 @@ impl Menu {
                     "OPTIONS",
                     "ONLINE SOLUTIONS",
                     "LEVEL EXCHANGE",
-                    "EXIT TO WINDOWS",
+                    "EXIT",
                 ],
                 "Use Cursor Keys and Enter to Select",
             ),
@@ -2593,7 +2593,7 @@ impl Menu {
         self.start(MAIN);
     }
 
-    /// `MenuLoop10`: "Exit to Windows?". Escape here quits too.
+    /// `MenuLoop10`: "Exit?". Escape here quits too.
     fn exit(&mut self, keys: MenuKeys, ticks: u32) {
         let (title, rule, yes, no) = match self.language {
             1 => (
@@ -2602,18 +2602,8 @@ impl Menu {
                 "JA BITTE",
                 "NEIN DANKE",
             ),
-            2 => (
-                "Sortie vers Windows?",
-                "--------------------",
-                "BIEN SUR",
-                "NON MERCI",
-            ),
-            _ => (
-                "Exit to Windows?",
-                "----------------",
-                "SURE THING",
-                "NO THANKS",
-            ),
+            2 => ("Sortie?", "-------", "BIEN SUR", "NON MERCI"),
+            _ => ("Exit?", "-----", "SURE THING", "NO THANKS"),
         };
         self.text.center(title, 7.0, 1.0, 50);
         self.text.center(rule, 8.0, 1.0, 51);
@@ -2648,8 +2638,8 @@ impl Menu {
                 self.text.center("NEIN DANKE", 11.0, 1.0, 53);
             }
             2 => {
-                self.text.center("Sortie vers Windows?", 7.0, 1.0, 50);
-                self.text.center("--------------------", 8.0, 1.0, 51);
+                self.text.center("Sortie?", 7.0, 1.0, 50);
+                self.text.center("-------", 8.0, 1.0, 51);
                 self.text.center("BIEN SUR", 10.0, 1.0, 52);
                 self.text.center("NON MERCI", 11.0, 1.0, 53);
             }
@@ -2815,7 +2805,7 @@ mod tests {
         assert!(text(&m).starts_with("v10.00"));
         press(&mut m, &mut o, ESCAPE);
         assert_eq!(m.current, EXIT);
-        // Esc on "Exit to Windows?" quits too.
+        // Esc on "Exit?" quits too.
         let a = press(&mut m, &mut o, ESCAPE);
         assert!(a.contains(&Action::Quit { url: None }));
     }
