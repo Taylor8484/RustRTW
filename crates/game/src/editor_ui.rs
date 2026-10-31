@@ -17,14 +17,17 @@ use bevy_egui::egui::{
 };
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle};
 use wonderland_editor::canvas::{Block, Brush, Cell, Gesture, Tool};
+use wonderland_editor::proof::{Failure, Verdict};
 use wonderland_editor::settings::{
     self, BACKGROUNDS, CUSTOM_BACKGROUND, CUSTOM_STYLE, Folder, HOUSE_STYLES, MUSIC, STYLES,
     Setting, TINTS,
 };
 use wonderland_editor::signs::{sign_lines, stored_sign};
 use wonderland_formats::catalogue::{self, Axis, Group, Layer, PIECES, Piece, Sprite};
+use wonderland_logic::Ruleset;
 
 use crate::camera::GameCamera;
+use crate::editor_check::PackProof;
 use crate::editor_scene::{Dialog, Editing, Leaving, Request, Studio};
 use crate::flow::Phase;
 use crate::level::GameData;
@@ -50,6 +53,7 @@ const CHOSEN: Color32 = Color32::from_rgb(90, 200, 255);
 const LINK: Color32 = Color32::from_rgb(120, 255, 140);
 const FAINT_LINK: Color32 = Color32::from_rgba_premultiplied(50, 110, 60, 110);
 const WARNING: Color32 = Color32::from_rgb(255, 80, 60);
+const PROVEN: Color32 = Color32::from_rgb(120, 255, 140);
 /// More choices than this go in a list instead of buttons.
 const MAX_BUTTONS: usize = 5;
 const SIGN: std::ops::Range<i32> = 1300..1320;
@@ -310,7 +314,65 @@ fn panels(
         let projection = Projection { camera, transform };
         popup(&ctx, &projection, studio, &editing);
     }
-    dialogs(&ctx, studio);
+    dialogs(&ctx, studio, editing.0.is_dirty());
+}
+
+/// `ticks` of play as minutes and seconds.
+fn clock(ticks: u32) -> String {
+    let seconds = i64::from(ticks) * i64::from(Ruleset::rtwp().tick_ms) / 1000;
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// What a proof's verdict comes to, in a line.
+fn verdict_line(verdict: &Verdict) -> String {
+    match verdict {
+        Verdict::Proven(ticks) => format!("Proven beatable, in {}", clock(*ticks)),
+        Verdict::Broke {
+            failure: Failure::NoStart(e),
+            ..
+        } => format!("The solution cannot run: {e}"),
+        Verdict::Broke { failure, tick, .. } => format!(
+            "The solution breaks at {}: {}",
+            clock(*tick),
+            match failure {
+                Failure::Lost => "the level is lost",
+                _ => "it no longer reaches the exit",
+            }
+        ),
+    }
+}
+
+fn proof_panel(ui: &mut egui::Ui, studio: &mut Studio, revision: u64) {
+    ui.strong("Proof");
+    let proof = &studio.proof;
+    if proof.checking(revision) {
+        ui.label("Checking the solution");
+        return;
+    }
+    let mut go = None;
+    match &proof.verdict {
+        None => {
+            ui.label("Not proven. Win a Test Play from the start.");
+        }
+        Some(verdict @ Verdict::Proven(_)) => {
+            ui.colored_label(PROVEN, verdict_line(verdict));
+        }
+        Some(verdict @ Verdict::Broke { cell, .. }) => {
+            let line = egui::RichText::new(verdict_line(verdict)).color(WARNING);
+            match cell {
+                Some(cell) => {
+                    if ui.link(line).clicked() {
+                        go = Some(Request::GoTo(*cell));
+                    }
+                }
+                None => {
+                    ui.label(line);
+                }
+            }
+            ui.small("Win a Test Play from the start for a new solution.");
+        }
+    }
+    studio.request.extend(go);
 }
 
 /// The choices of the one piece selected, beside it.
@@ -511,6 +573,8 @@ fn level_panel(ui: &mut egui::Ui, studio: &mut Studio, palette: &mut Palette, ed
     }
 
     ui.separator();
+    proof_panel(ui, studio, editor.revision());
+    ui.separator();
     ui.checkbox(&mut palette.hide_links, "Hide links");
     if studio.warnings.is_empty() {
         ui.label("No warnings");
@@ -548,6 +612,7 @@ fn tool_bar(ui: &mut egui::Ui, studio: &mut Studio, name: &str, dirty: bool) {
             Request::Leave(Leaving::Open),
         );
         ask(ui, "Save", "Ctrl+S", Request::AskToSave);
+        ask(ui, "Packs", "Level packs", Request::ListPacks);
         ui.separator();
         ask(ui, "Undo", "Ctrl+Z", Request::Undo);
         ask(ui, "Redo", "Ctrl+Y", Request::Redo);
@@ -556,6 +621,12 @@ fn tool_bar(ui: &mut egui::Ui, studio: &mut Studio, name: &str, dirty: bool) {
         ask(ui, "Cut", "Ctrl+X", Request::Cut);
         ask(ui, "Paste", "Ctrl+V, at the pointer", Request::Paste);
         ask(ui, "Delete", "Del", Request::Delete);
+        ask(
+            ui,
+            "Stamp",
+            "Keep the selection as a stamp",
+            Request::AskToStamp,
+        );
         ui.separator();
         ask(ui, "Test Play", "F5, or F6 from the pointer", Request::Play);
         ask(
@@ -643,6 +714,16 @@ fn palette_panel(
                 studio.canvas.tool = Tool::Brush(brush(piece, choices));
             }
         }
+    }
+    if !studio.stamps.is_empty() {
+        egui::CollapsingHeader::new("Stamps").show(ui, |ui| {
+            for name in &studio.stamps {
+                if ui.button(name).clicked() {
+                    studio.request.push(Request::PickStamp(name.clone()));
+                    palette.picked = None;
+                }
+            }
+        });
     }
     for (group, title) in GROUPS {
         egui::CollapsingHeader::new(title)
@@ -776,6 +857,14 @@ fn canvas_marks(
             projection.outline(painter, cell, (1, 1), Stroke::new(2.0, WARNING));
         }
     }
+    if let Some(Verdict::Broke {
+        cell: Some((x, y)), ..
+    }) = studio.proof.verdict
+        && !studio.proof.checking(editing.0.revision())
+    {
+        let cell = (x as isize, y as isize);
+        projection.outline(painter, cell, (1, 1), Stroke::new(3.0, WARNING));
+    }
 
     if let Some(block) = studio.canvas.selection() {
         block_outline(projection, painter, block, (0, 0), CHOSEN);
@@ -810,6 +899,14 @@ fn canvas_marks(
         }
         Some(Gesture::Stroke { .. }) => {}
         None => {
+            if let (Tool::Stamp, Some(size), Some(cell), true) = (
+                studio.canvas.tool,
+                studio.canvas.stamp_size(),
+                studio.hover,
+                studio.on_canvas(),
+            ) {
+                projection.outline(painter, cell, size, Stroke::new(2.0, HOVER));
+            }
             if let (Tool::Brush(b), Some(cell), true) =
                 (studio.canvas.tool, studio.hover, studio.on_canvas())
             {
@@ -829,7 +926,7 @@ fn canvas_marks(
     }
 }
 
-fn dialogs(ctx: &egui::Context, studio: &mut Studio) {
+fn dialogs(ctx: &egui::Context, studio: &mut Studio, dirty: bool) {
     let window = |title: &'static str| {
         egui::Window::new(title)
             .collapsible(false)
@@ -878,7 +975,10 @@ fn dialogs(ctx: &egui::Context, studio: &mut Studio) {
                     .show(ui, |ui| {
                         for file in files.iter() {
                             if ui.button(file).clicked() {
-                                ask = Some(Request::OpenFile(file.clone()));
+                                ask = Some(Request::OpenFile {
+                                    pack: None,
+                                    file: file.clone(),
+                                });
                             }
                         }
                     });
@@ -897,6 +997,112 @@ fn dialogs(ctx: &egui::Context, studio: &mut Studio) {
                         ask = Some(Request::Discard(then));
                     }
                     close = ui.button("Cancel").clicked();
+                });
+            });
+        }
+        Dialog::Stamp { name, replacing } => {
+            window("Keep as a Stamp").show(ctx, |ui| {
+                ui.label("Name, letters and digits:");
+                ui.text_edit_singleline(name);
+                if *replacing {
+                    ui.colored_label(EDGE, format!("{name} is there already."));
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(if *replacing { "Replace" } else { "Keep" })
+                        .clicked()
+                    {
+                        ask = Some(Request::SaveStamp {
+                            name: name.clone(),
+                            replace: *replacing,
+                        });
+                    }
+                    close = ui.button("Cancel").clicked();
+                });
+            });
+        }
+        Dialog::Packs { names, new } => {
+            window("Level Packs").show(ctx, |ui| {
+                ui.label("A pack is a folder of levels, played in order.");
+                for name in names.iter() {
+                    if ui.button(name).clicked() {
+                        ask = Some(Request::OpenPack(name.clone()));
+                    }
+                }
+                ui.separator();
+                ui.label("New pack, letters and digits:");
+                ui.text_edit_singleline(new);
+                ui.horizontal(|ui| {
+                    if ui.button("Create").clicked() {
+                        ask = Some(Request::NewPack(new.clone()));
+                    }
+                    close = ui.button("Close").clicked();
+                });
+            });
+        }
+        Dialog::Pack { name, lines } => {
+            window("Level Pack").show(ctx, |ui| {
+                ui.strong(name.as_str());
+                if lines.is_empty() {
+                    ui.label("There are no levels in this pack yet.");
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for (place, line) in lines.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                if ui.add_enabled(place > 0, egui::Button::new("Up")).clicked() {
+                                    ask = Some(Request::MoveUp(name.clone(), place));
+                                }
+                                if ui.button("Take Out").clicked() {
+                                    ask = Some(Request::TakeOut(name.clone(), place));
+                                }
+                                let open = egui::Button::new(line.file.as_str());
+                                if ui
+                                    .add_enabled(!dirty, open)
+                                    .on_disabled_hover_text("Save this level first")
+                                    .on_hover_text(&line.title)
+                                    .clicked()
+                                {
+                                    ask = Some(Request::OpenFile {
+                                        pack: Some(name.clone()),
+                                        file: line.file.clone(),
+                                    });
+                                }
+                                match &line.proof {
+                                    PackProof::Checking => {
+                                        ui.label("Checking");
+                                    }
+                                    PackProof::None => {
+                                        ui.colored_label(EDGE, "Not proven");
+                                    }
+                                    PackProof::Done(verdict @ Verdict::Proven(_)) => {
+                                        ui.colored_label(PROVEN, verdict_line(verdict));
+                                    }
+                                    PackProof::Done(verdict) => {
+                                        ui.colored_label(WARNING, verdict_line(verdict));
+                                    }
+                                }
+                                if line.warnings > 0 {
+                                    let count = format!("{} warnings", line.warnings);
+                                    ui.colored_label(WARNING, count);
+                                }
+                            });
+                        }
+                    });
+                ui.small("Moving a level renames its file, so share the whole folder.");
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Add This Level")
+                        .on_hover_text("Moves the saved level on show into the pack")
+                        .clicked()
+                    {
+                        ask = Some(Request::AddToPack(name.clone()));
+                    }
+                    if ui.button("All Packs").clicked() {
+                        ask = Some(Request::ListPacks);
+                    }
+                    close = ui.button("Close").clicked();
                 });
             });
         }

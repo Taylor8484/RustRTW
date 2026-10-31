@@ -9,5 +9,6 @@
 //!   `data/tow.ron` as world pack 3) and the level selector's rules.
 
 pub mod custom;
+pub mod pack;
 pub mod profile;
 pub mod worlds;

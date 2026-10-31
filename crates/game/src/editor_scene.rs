@@ -12,7 +12,12 @@
 //! itself: it asks through [`Studio::request`], as the keys do.
 //!
 //! While [`Editing`] exists, [`crate::flow`] brings a won or abandoned level
-//! back here and records nothing.
+//! back here and records nothing. A test play from the level's start keeps
+//! its keys, and a win there becomes the level's [`Solution`], which
+//! [`crate::editor_check`] then checks after every edit.
+//!
+//! Levels are saved in `CustomLevels`, or in a pack, a folder there, with the
+//! solution beside the level. Stamps are in a folder of their own.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,16 +27,21 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use wonderland_campaign::custom;
+use wonderland_campaign::pack::{self, Pack, solution_path};
 use wonderland_editor::canvas::{Brush, Canvas, Cell, Tool, turned};
 use wonderland_editor::links::{Link, Spot, Warning, links, warnings};
+use wonderland_editor::proof::{Recording, Solution, fair};
 use wonderland_editor::settings::{Folder, Setting};
-use wonderland_editor::{Editor, level_name};
+use wonderland_editor::{Clip, Editor, level_name, stamp};
+use wonderland_formats::Level;
 use wonderland_formats::catalogue::{self, Group, Layer};
-use wonderland_formats::{Game, Level};
-use wonderland_logic::Session;
+use wonderland_logic::{Completion, Ruleset};
 
 use crate::camera::{FAR, GameCamera, fov, view_aspect};
 use crate::coords::rotation;
+use crate::editor_check::{
+    Answers, PackLine, PackProof, Proof, check_pack, pack_lines, read_level, read_solution,
+};
 use crate::flow::{Phase, begin_memory};
 use crate::hud::{Screen, ScreenFilled};
 use crate::level::GameData;
@@ -115,6 +125,21 @@ pub enum Dialog {
     /// The custom levels to choose from.
     Open(Vec<String>),
     Unsaved(Leaving),
+    /// Naming a stamp of the selection.
+    Stamp {
+        name: String,
+        replacing: bool,
+    },
+    /// The packs to choose from, and the name for a new one.
+    Packs {
+        names: Vec<String>,
+        new: String,
+    },
+    /// One pack's levels.
+    Pack {
+        name: String,
+        lines: Vec<PackLine>,
+    },
 }
 
 /// What the panels or the keys ask for.
@@ -143,13 +168,32 @@ pub enum Request {
     Leave(Leaving),
     /// [`Request::Leave`] with any changes given up.
     Discard(Leaving),
-    OpenFile(String),
+    /// Opens a level of `CustomLevels`, or of a pack there.
+    OpenFile {
+        pack: Option<String>,
+        file: String,
+    },
     AskToSave,
     Save {
         name: String,
         title: String,
         replace: bool,
     },
+    AskToStamp,
+    SaveStamp {
+        name: String,
+        replace: bool,
+    },
+    PickStamp(String),
+    ListPacks,
+    NewPack(String),
+    OpenPack(String),
+    /// Moves the saved level on show into a pack.
+    AddToPack(String),
+    /// Moves a level of a pack up one place.
+    MoveUp(String, usize),
+    /// Moves a level of a pack back out to `CustomLevels`.
+    TakeOut(String, usize),
 }
 
 /// The editor's screen. Kept through test play.
@@ -176,6 +220,16 @@ pub struct Studio {
     pub warnings: Vec<Warning>,
     /// The art folders the game folder holds, by [`FOLDERS`].
     pub folders: Vec<(Folder, Vec<String>)>,
+    /// The stamps on disk, by name.
+    pub stamps: Vec<String>,
+    /// The way to win the level on show.
+    pub proof: Proof,
+    /// The file the level on show was opened from or saved to, without its
+    /// extension, and the pack that is in.
+    pub file: Option<String>,
+    pub pack: Option<String>,
+    /// The check of the pack in the dialog.
+    pack_check: Option<Answers<(usize, PackProof)>>,
     /// The [`Editor::revision`] on show.
     drawn: Option<u64>,
     /// The view fits the level on show.
@@ -198,6 +252,48 @@ impl Studio {
 /// The `CustomLevels` folder.
 fn levels_dir(data: &GameData) -> PathBuf {
     data.assets.dir().join(custom::FOLDER)
+}
+
+/// The folder the level on show belongs in.
+fn level_dir(data: &GameData, studio: &Studio) -> PathBuf {
+    let dir = levels_dir(data);
+    studio.pack.as_ref().map_or(dir.clone(), |p| dir.join(p))
+}
+
+fn stamps_dir(data: &GameData) -> PathBuf {
+    data.assets.dir().join(stamp::FOLDER)
+}
+
+/// The stamps in `dir`, by name.
+fn stamp_names(dir: &Path) -> Vec<String> {
+    let extension = format!(".{}", stamp::EXTENSION);
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter_map(|n| n.strip_suffix(&extension).map(str::to_owned))
+        .collect();
+    names.sort_by_key(|n| n.to_ascii_uppercase());
+    names
+}
+
+fn stamp_path(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.{}", stamp::EXTENSION))
+}
+
+/// Writes the selection's cells as a stamp.
+fn write_stamp(dir: &Path, name: &str, clip: &Clip) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = stamp_path(dir, name);
+    std::fs::write(&path, clip.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Reads a stamp the palette picked.
+fn read_stamp(dir: &Path, name: &str) -> Result<Clip, String> {
+    let path = stamp_path(dir, name);
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Clip::parse(&bytes).ok_or_else(|| format!("{name} is not a stamp"))
 }
 
 /// The folders under `dir`, by name.
@@ -252,12 +348,26 @@ fn write_level(editor: &mut Editor, dir: &Path, name: &str, title: &str) -> Resu
     std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Writes the level's solution beside it, or takes away an old one, which
+/// is for whatever the file held before.
+fn write_solution(dir: &Path, name: &str, solution: Option<&Solution>) -> Result<(), String> {
+    let path = solution_path(&dir.join(format!("{name}.LV6")));
+    let done = match solution {
+        Some(solution) => std::fs::write(&path, solution.to_bytes()),
+        None => match std::fs::remove_file(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            done => done,
+        },
+    };
+    done.map_err(|e| format!("{}: {e}", path.display()))
+}
+
 pub struct EditorPlugin;
 
 impl Plugin for EditorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Studio>()
-            .add_systems(OnEnter(Phase::Editor), clear_screen)
+            .add_systems(OnEnter(Phase::Editor), (clear_screen, take_win))
             .add_systems(OnExit(Phase::Editor), leave_canvas)
             .add_systems(
                 Update,
@@ -267,6 +377,7 @@ impl Plugin for EditorPlugin {
                     editor_keys,
                     carry_out,
                     follow_level,
+                    follow_proof,
                     place_camera,
                 )
                     .chain()
@@ -291,6 +402,40 @@ fn clear_screen(
         (folder, dir.map(|d| subfolders(&d)).unwrap_or_default())
     };
     studio.folders = FOLDERS.iter().map(list).collect();
+    studio.stamps = stamp_names(&stamps_dir(&data));
+}
+
+/// A test play from the start that won gives the level its solution, as long
+/// as it wins again. Saved at once if the level on disk is the one played.
+fn take_win(
+    sim: Option<ResMut<Sim>>,
+    editing: Option<Res<Editing>>,
+    data: Res<GameData>,
+    mut studio: ResMut<Studio>,
+) {
+    let (Some(mut sim), Some(editing)) = (sim, editing) else {
+        return;
+    };
+    let Some(recording) = sim.recording.take() else {
+        return;
+    };
+    if sim.world.completion != Completion::Done {
+        return;
+    }
+    let editor = &editing.0;
+    let level = editor.playable();
+    let options = fair(data.options);
+    let Some(solution) = Solution::new(&level, &Ruleset::rtwp(), options, &recording) else {
+        studio.status = "That win could not be repeated, so it proves nothing".to_owned();
+        return;
+    };
+    studio.status = "Proven beatable".to_owned();
+    if let (false, Some(file)) = (editor.is_dirty(), &studio.file)
+        && let Err(e) = write_solution(&level_dir(&data, &studio), file, Some(&solution))
+    {
+        studio.status = e;
+    }
+    studio.proof.won(solution, editor.revision());
 }
 
 /// Back to what the play camera expects, and the next visit redraws.
@@ -468,18 +613,22 @@ fn editor_keys(
     studio.request.extend(request);
 }
 
-/// Starts test play of `level`, with its music.
+/// Starts test play of `level`, with its music. A play of the level as it
+/// stands keeps its `recording`, which a win makes the solution.
+#[allow(clippy::too_many_arguments)]
 fn play(
     commands: &mut Commands,
     data: &GameData,
     level: Level,
+    recording: Option<Recording>,
     now: i64,
     next: &mut NextState<Phase>,
     music: &mut MusicRequest,
     status: &mut String,
 ) {
-    match begin_memory(data, level, Session::default(), now) {
-        Ok((level, sim)) => {
+    match begin_memory(data, level, now) {
+        Ok((level, mut sim)) => {
+            sim.recording = recording;
             if let Some(track) = level.level.music_track {
                 music.0 = Some(Some(extra_track(track)));
             }
@@ -494,17 +643,73 @@ fn play(
     }
 }
 
-/// Reads a level the file menu picked.
-fn read_level(path: &Path) -> Result<Level, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Level::parse(&bytes, Game::Rtwp).map_err(|e| format!("{}: {e}", path.display()))
-}
-
 /// Starts on another level, with nothing left of the last one.
 fn replace_level(editing: &mut Editing, studio: &mut Studio, editor: Editor) {
     editing.0 = editor;
     studio.canvas = Canvas::default();
     studio.fitted = false;
+    studio.proof = Proof::default();
+    studio.file = None;
+    studio.pack = None;
+}
+
+/// Shows the pack `name` and starts checking its levels.
+fn show_pack(studio: &mut Studio, data: &GameData, name: String) {
+    let pack = Pack::new(&levels_dir(data), &name);
+    match pack.levels() {
+        Ok(files) => {
+            let lines = pack_lines(&pack.dir, files.clone());
+            let check = check_pack(pack.dir, files, fair(data.options));
+            studio.pack_check = Some(check);
+            studio.dialog = Dialog::Pack { name, lines };
+        }
+        Err(e) => studio.status = e.to_string(),
+    }
+}
+
+/// Moves the level on show into a pack, which it must be saved for.
+fn add_to_pack(
+    editor: &Editor,
+    studio: &mut Studio,
+    data: &GameData,
+    name: &str,
+) -> Result<(), String> {
+    if studio.pack.is_some() {
+        return Err("This level is in a pack already".to_owned());
+    }
+    let file = studio.file.clone().filter(|_| !editor.is_dirty());
+    let file = file.ok_or("Save the level before adding it to a pack")?;
+    let dir = levels_dir(data);
+    let path = dir.join(format!("{file}.LV6"));
+    let added = Pack::new(&dir, name)
+        .add(&path)
+        .map_err(|e| e.to_string())?;
+    let stem = added.rsplit_once('.').map_or(added.as_str(), |(s, _)| s);
+    studio.file = Some(stem.to_owned());
+    studio.pack = Some(name.to_owned());
+    Ok(())
+}
+
+/// The file of the level on show as a place in pack `name`, if it is there.
+fn open_place(studio: &Studio, data: &GameData, name: &str) -> Option<usize> {
+    let file = studio
+        .file
+        .as_ref()
+        .filter(|_| studio.pack.as_deref() == Some(name))?;
+    let levels = Pack::new(&levels_dir(data), name).levels().ok()?;
+    levels
+        .iter()
+        .position(|l| l.strip_suffix(".LV6") == Some(file))
+}
+
+/// Keeps track of the level on show now that it is at `place` in pack `name`.
+fn set_open_place(studio: &mut Studio, data: &GameData, name: &str, place: usize) {
+    let levels = Pack::new(&levels_dir(data), name)
+        .levels()
+        .unwrap_or_default();
+    if let Some(file) = levels.get(place).and_then(|l| l.strip_suffix(".LV6")) {
+        studio.file = Some(file.to_owned());
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -551,6 +756,7 @@ fn carry_out(
                     &mut commands,
                     &data,
                     level,
+                    Some(Recording::default()),
                     now,
                     &mut next,
                     music,
@@ -575,6 +781,7 @@ fn carry_out(
                     &mut commands,
                     &data,
                     level,
+                    None,
                     now,
                     &mut next,
                     music,
@@ -622,17 +829,27 @@ fn carry_out(
                     }
                 }
             }
-            Request::OpenFile(name) => {
+            Request::OpenFile { pack, file } => {
                 studio.dialog = Dialog::None;
-                match read_level(&levels_dir(&data).join(&name)) {
-                    Ok(level) => replace_level(&mut editing, studio, Editor::open(level)),
+                let dir = levels_dir(&data);
+                let dir = pack.as_ref().map_or(dir.clone(), |p| dir.join(p));
+                let path = dir.join(&file);
+                match read_level(&path) {
+                    Ok(level) => {
+                        replace_level(&mut editing, studio, Editor::open(level));
+                        studio.proof = Proof::new(read_solution(&path));
+                        studio.pack = pack;
+                        let stem = file.rsplit_once('.').map(|(stem, _)| stem.to_owned());
+                        studio.file = stem.filter(|s| level_name(s).as_ref() == Some(s));
+                    }
                     Err(e) => studio.status = e,
                 }
             }
             Request::AskToSave => {
                 let level = editor.level();
+                let name = studio.file.clone();
                 studio.dialog = Dialog::Save {
-                    name: level_name(&level.file_name).unwrap_or_default(),
+                    name: name.or(level_name(&level.file_name)).unwrap_or_default(),
                     title: level.description.clone(),
                     replacing: false,
                 };
@@ -649,7 +866,7 @@ fn carry_out(
                     );
                     continue;
                 };
-                let dir = levels_dir(&data);
+                let dir = level_dir(&data, studio);
                 if !replace && dir.join(format!("{name}.LV6")).exists() {
                     studio.dialog = Dialog::Save {
                         name,
@@ -660,12 +877,148 @@ fn carry_out(
                 }
                 studio.canvas.cancel(editor);
                 studio.dialog = Dialog::None;
-                studio.status = match write_level(editor, &dir, &name, &title) {
-                    Ok(()) => format!("Saved {name}"),
+                let solution = studio.proof.solution.as_ref();
+                let written = write_level(editor, &dir, &name, &title)
+                    .and_then(|()| write_solution(&dir, &name, solution));
+                studio.status = match written {
+                    Ok(()) => {
+                        let saved = format!("Saved {name}");
+                        studio.file = Some(name);
+                        saved
+                    }
                     Err(e) => e,
                 };
             }
+            Request::AskToStamp => {
+                if studio.canvas.selection().is_some() {
+                    studio.dialog = Dialog::Stamp {
+                        name: String::new(),
+                        replacing: false,
+                    };
+                } else {
+                    studio.status = "Select the cells to keep as a stamp".to_owned();
+                }
+            }
+            Request::SaveStamp { name, replace } => {
+                let Some(name) = level_name(&name) else {
+                    studio.status = format!(
+                        "A stamp name is 1 to {} letters and digits",
+                        wonderland_editor::MAX_NAME
+                    );
+                    continue;
+                };
+                let dir = stamps_dir(&data);
+                if !replace && stamp_path(&dir, &name).exists() {
+                    studio.dialog = Dialog::Stamp {
+                        name,
+                        replacing: true,
+                    };
+                    continue;
+                }
+                studio.dialog = Dialog::None;
+                let Some(clip) = studio.canvas.selected_clip(editor) else {
+                    continue;
+                };
+                studio.status = match write_stamp(&dir, &name, &clip) {
+                    Ok(()) => format!("Kept {name} as a stamp"),
+                    Err(e) => e,
+                };
+                studio.stamps = stamp_names(&dir);
+            }
+            Request::PickStamp(name) => match read_stamp(&stamps_dir(&data), &name) {
+                Ok(clip) => {
+                    studio.canvas.cancel(editor);
+                    studio.canvas.pick_stamp(clip);
+                }
+                Err(e) => studio.status = e,
+            },
+            Request::ListPacks => {
+                let dir = levels_dir(&data);
+                studio.pack_check = None;
+                studio.dialog = Dialog::Packs {
+                    names: pack::packs(&dir).unwrap_or_default(),
+                    new: String::new(),
+                };
+            }
+            Request::NewPack(name) => {
+                let Some(name) = level_name(&name) else {
+                    studio.status = format!(
+                        "A pack name is 1 to {} letters and digits",
+                        wonderland_editor::MAX_NAME
+                    );
+                    continue;
+                };
+                let dir = levels_dir(&data).join(&name);
+                match std::fs::create_dir_all(&dir) {
+                    Ok(()) => show_pack(studio, &data, name),
+                    Err(e) => studio.status = format!("{}: {e}", dir.display()),
+                }
+            }
+            Request::OpenPack(name) => show_pack(studio, &data, name),
+            Request::AddToPack(name) => {
+                if let Err(e) = add_to_pack(editor, studio, &data, &name) {
+                    studio.status = e;
+                }
+                show_pack(studio, &data, name);
+            }
+            Request::MoveUp(name, place) => {
+                let open = open_place(studio, &data, &name);
+                match Pack::new(&levels_dir(&data), &name).move_up(place) {
+                    Ok(_) => {
+                        let now = match open {
+                            Some(p) if p == place => Some(p - 1),
+                            Some(p) if p + 1 == place => Some(p + 1),
+                            other => other,
+                        };
+                        if let Some(now) = now {
+                            set_open_place(studio, &data, &name, now);
+                        }
+                    }
+                    Err(e) => studio.status = e.to_string(),
+                }
+                show_pack(studio, &data, name);
+            }
+            Request::TakeOut(name, place) => {
+                let open = open_place(studio, &data, &name);
+                let dir = levels_dir(&data);
+                let pack = Pack::new(&dir, &name);
+                let leaving = pack.levels().unwrap_or_default().get(place).cloned();
+                match pack.take_out(place, &dir) {
+                    Ok(()) => match open {
+                        Some(p) if p == place => {
+                            let file = leaving.unwrap_or_default();
+                            let file = pack::unplaced(&file);
+                            let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
+                            studio.file = Some(stem.to_owned());
+                            studio.pack = None;
+                        }
+                        Some(p) if p > place => set_open_place(studio, &data, &name, p - 1),
+                        _ => {}
+                    },
+                    Err(e) => studio.status = e.to_string(),
+                }
+                show_pack(studio, &data, name);
+            }
         }
+    }
+}
+
+/// Keeps the level's proof and the pack dialog's up to date.
+fn follow_proof(editing: Res<Editing>, data: Res<GameData>, mut studio: ResMut<Studio>) {
+    let studio = &mut *studio;
+    let settled = studio.canvas.gesture().is_none();
+    studio.proof.follow(&editing.0, fair(data.options), settled);
+    let Some(answers) = &studio.pack_check else {
+        return;
+    };
+    let (answer, more) = answers.next();
+    if let (Some((i, proof)), Dialog::Pack { lines, .. }) = (answer, &mut studio.dialog)
+        && let Some(line) = lines.get_mut(i)
+    {
+        line.proof = proof;
+    }
+    if !more || matches!(studio.dialog, Dialog::None) {
+        studio.pack_check = None;
     }
 }
 
@@ -692,7 +1045,7 @@ fn follow_level(
     studio.links = links(editor.level());
     studio.warnings = warnings(editor.level());
     let now = time.elapsed().as_millis() as i64;
-    match begin_memory(&data, editor.playable(), Session::default(), now) {
+    match begin_memory(&data, editor.playable(), now) {
         Ok((level, mut sim)) => {
             // A level fades in from dark, and this one never ticks.
             let lights = &mut sim.world.lights;
@@ -763,7 +1116,8 @@ mod tests {
 
     use bevy::state::app::StatesPlugin;
     use wonderland_campaign::profile::Profile;
-    use wonderland_logic::{Completion, Event};
+    use wonderland_editor::proof::Verdict;
+    use wonderland_logic::{Event, Input};
 
     use super::*;
     use crate::audio::MenuSounds;
@@ -884,6 +1238,294 @@ mod tests {
         );
         assert!(!editor.is_dirty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A game folder with no game in it, which saving can write to.
+    fn temp_data(tag: &str) -> Option<GameData> {
+        let dir = std::env::temp_dir().join(format!("wl-studio-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        GameData::open(&dir).ok()
+    }
+
+    /// Stinky, then a clear run to the exit, which F5 tests.
+    fn corridor(app: &mut App) {
+        let mut editing = app.world_mut().resource_mut::<Editing>();
+        editing.0.place(2, 5, Layer::Object, 1);
+        editing.0.place(6, 5, Layer::Object, 6);
+        editing.0.commit();
+        app.update();
+    }
+
+    /// Plays the corridor to the end, as if right were held throughout.
+    fn win(app: &mut App) {
+        tap(app, KeyCode::F5);
+        assert_eq!(phase(app), Phase::Game);
+        let mut sim = app.world_mut().resource_mut::<Sim>();
+        let recording = sim.recording.as_mut().expect("from the start");
+        let right = Input {
+            right: true,
+            ..Input::default()
+        };
+        (0..2000).for_each(|_| recording.push(right));
+        sim.world.completion = Completion::Done;
+        app.update();
+        app.update();
+        assert_eq!(phase(app), Phase::Editor);
+    }
+
+    /// Runs the app until the check of the level on show is in.
+    fn settle(app: &mut App) -> Option<Verdict> {
+        for _ in 0..500 {
+            app.update();
+            let revision = app.world().resource::<Editing>().0.revision();
+            let proof = &app.world().resource::<Studio>().proof;
+            if !proof.checking(revision) {
+                return proof.verdict.clone();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the check did not finish");
+    }
+
+    #[test]
+    fn a_win_proves_the_level_and_an_edit_rechecks_it() {
+        let Some(data) = temp_data("proof") else {
+            return;
+        };
+        let dir = levels_dir(&data);
+        let mut app = app(data);
+        corridor(&mut app);
+        assert_eq!(settle(&mut app), None);
+        win(&mut app);
+        let Some(Verdict::Proven(ticks)) = settle(&mut app) else {
+            panic!("won");
+        };
+
+        // A wall in the way breaks it, and undoing mends it.
+        let mut editing = app.world_mut().resource_mut::<Editing>();
+        editing.0.place(4, 5, Layer::Tile, 200);
+        editing.0.commit();
+        let Some(Verdict::Broke { cell, .. }) = settle(&mut app) else {
+            panic!("the way is shut");
+        };
+        assert_eq!(cell, Some((4, 5)));
+        request(&mut app, Request::Undo);
+        assert_eq!(settle(&mut app), Some(Verdict::Proven(ticks)));
+
+        // The solution goes with the level, and comes back with it.
+        request(
+            &mut app,
+            Request::Save {
+                name: "HALL".into(),
+                title: "Hall".into(),
+                replace: false,
+            },
+        );
+        assert!(dir.join("HALL.WIN").exists());
+        request(&mut app, Request::Leave(Leaving::New));
+        assert_eq!(settle(&mut app), None);
+        let file = "HALL.LV6".to_owned();
+        request(&mut app, Request::OpenFile { pack: None, file });
+        assert_eq!(settle(&mut app), Some(Verdict::Proven(ticks)));
+
+        // Saving over it with no solution takes the old one away.
+        app.world_mut().resource_mut::<Studio>().proof = Proof::default();
+        request(
+            &mut app,
+            Request::Save {
+                name: "HALL".into(),
+                title: "Hall".into(),
+                replace: true,
+            },
+        );
+        assert!(!dir.join("HALL.WIN").exists());
+    }
+
+    #[test]
+    fn a_win_on_a_saved_level_is_kept_at_once() {
+        let Some(data) = temp_data("kept") else {
+            return;
+        };
+        let dir = levels_dir(&data);
+        let mut app = app(data);
+        corridor(&mut app);
+        request(
+            &mut app,
+            Request::Save {
+                name: "HALL".into(),
+                title: String::new(),
+                replace: false,
+            },
+        );
+        assert!(!dir.join("HALL.WIN").exists());
+        win(&mut app);
+        assert!(dir.join("HALL.WIN").exists());
+    }
+
+    #[test]
+    fn a_play_from_the_pointer_proves_nothing_and_losing_starts_the_keys_again() {
+        let Some(data) = temp_data("pointer") else {
+            return;
+        };
+        let mut app = app(data);
+        corridor(&mut app);
+        app.world_mut().resource_mut::<Studio>().hover = Some((4, 5));
+        tap(&mut app, KeyCode::F6);
+        assert!(app.world().resource::<Sim>().recording.is_none());
+        request_win(&mut app);
+        assert_eq!(settle(&mut app), None);
+
+        tap(&mut app, KeyCode::F5);
+        let mut sim = app.world_mut().resource_mut::<Sim>();
+        sim.recording.as_mut().unwrap().push(Input::default());
+        sim.world.session.rng = wonderland_logic::BlitzRng::new(99);
+        sim.world.completion = Completion::Restart;
+        app.update();
+        let level = app.world().resource::<LevelData>().level.clone();
+        let data = app.world().resource::<GameData>();
+        let (_, fresh) = begin_memory(data, level, 0).unwrap();
+        let sim = app.world().resource::<Sim>();
+        assert_eq!(sim.recording, Some(Recording::default()));
+        assert_eq!(sim.world.session, fresh.world.session);
+    }
+
+    fn request_win(app: &mut App) {
+        let mut sim = app.world_mut().resource_mut::<Sim>();
+        sim.world.completion = Completion::Done;
+        app.update();
+        app.update();
+    }
+
+    #[test]
+    fn a_selection_becomes_a_stamp_for_the_palette() {
+        let Some(data) = temp_data("stamp") else {
+            return;
+        };
+        let mut app = app(data);
+        request(&mut app, Request::AskToStamp);
+        let studio = app.world().resource::<Studio>();
+        assert_eq!(studio.dialog, Dialog::None, "nothing is selected");
+        assert!(!studio.status.is_empty());
+
+        let mut editing = app.world_mut().resource_mut::<Editing>();
+        editing.0.place(3, 3, Layer::Tile, 300);
+        editing.0.commit();
+        drag(&mut app, (3, 3), (3, 3));
+        request(&mut app, Request::AskToStamp);
+        let name = "pool".to_owned();
+        let replace = false;
+        request(&mut app, Request::SaveStamp { name, replace });
+        assert_eq!(app.world().resource::<Studio>().stamps, ["POOL"]);
+
+        let name = "POOL".to_owned();
+        request(&mut app, Request::SaveStamp { name, replace });
+        assert!(matches!(
+            app.world().resource::<Studio>().dialog,
+            Dialog::Stamp {
+                replacing: true,
+                ..
+            }
+        ));
+        app.world_mut().resource_mut::<Studio>().dialog = Dialog::None;
+
+        request(&mut app, Request::PickStamp("POOL".into()));
+        assert_eq!(app.world().resource::<Studio>().canvas.tool, Tool::Stamp);
+        drag(&mut app, (8, 8), (8, 8));
+        assert_eq!(app.world().resource::<Editing>().0.level().tile(8, 8), 300);
+    }
+
+    /// The names in the pack dialog.
+    fn pack_files(app: &App) -> Vec<String> {
+        match &app.world().resource::<Studio>().dialog {
+            Dialog::Pack { lines, .. } => lines.iter().map(|l| l.file.clone()).collect(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_saved_level_moves_into_a_pack_and_keeps_its_way_back() {
+        let Some(data) = temp_data("pack") else {
+            return;
+        };
+        let dir = levels_dir(&data);
+        let mut app = app(data);
+        corridor(&mut app);
+        win(&mut app);
+        request(&mut app, Request::AddToPack("MINE".into()));
+        assert!(!app.world().resource::<Studio>().status.is_empty());
+
+        for name in ["ONE", "TWO"] {
+            request(
+                &mut app,
+                Request::Save {
+                    name: name.into(),
+                    title: name.into(),
+                    replace: false,
+                },
+            );
+            if name == "ONE" {
+                request(&mut app, Request::NewPack("MINE".into()));
+                request(&mut app, Request::AddToPack("MINE".into()));
+                request(&mut app, Request::Leave(Leaving::New));
+                corridor(&mut app);
+            }
+        }
+        request(&mut app, Request::AddToPack("MINE".into()));
+        assert_eq!(pack_files(&app), ["01ONE.LV6", "02TWO.LV6"]);
+        assert_eq!(
+            app.world().resource::<Studio>().file.as_deref(),
+            Some("02TWO")
+        );
+
+        // The pack's proofs come in, and the one on show follows the order.
+        for _ in 0..500 {
+            app.update();
+            let done = matches!(&app.world().resource::<Studio>().dialog,
+                Dialog::Pack { lines, .. } if lines[0].proof != PackProof::Checking);
+            if done {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let Dialog::Pack { lines, .. } = &app.world().resource::<Studio>().dialog else {
+            panic!("the dialog stays");
+        };
+        assert!(matches!(
+            lines[0].proof,
+            PackProof::Done(Verdict::Proven(_))
+        ));
+
+        request(&mut app, Request::MoveUp("MINE".into(), 1));
+        assert_eq!(pack_files(&app), ["01TWO.LV6", "02ONE.LV6"]);
+        let studio = app.world().resource::<Studio>();
+        assert_eq!(studio.file.as_deref(), Some("01TWO"));
+        assert!(dir.join("MINE/02ONE.WIN").exists());
+
+        // Saving now goes to the pack, not beside it.
+        request(&mut app, Request::AskToSave);
+        match &app.world().resource::<Studio>().dialog {
+            Dialog::Save { name, .. } => assert_eq!(name, "01TWO"),
+            other => panic!("{other:?}"),
+        }
+        request(
+            &mut app,
+            Request::Save {
+                name: "01TWO".into(),
+                title: String::new(),
+                replace: true,
+            },
+        );
+        assert!(!dir.join("01TWO.LV6").exists());
+
+        request(&mut app, Request::TakeOut("MINE".into(), 0));
+        assert_eq!(pack_files(&app), ["01ONE.LV6"]);
+        let studio = app.world().resource::<Studio>();
+        assert_eq!(
+            (studio.file.as_deref(), studio.pack.as_deref()),
+            (Some("TWO"), None)
+        );
+        assert!(dir.join("TWO.LV6").exists());
     }
 
     #[test]

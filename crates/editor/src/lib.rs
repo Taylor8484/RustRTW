@@ -8,12 +8,16 @@
 //! and saving does what `SaveLevel` and `checklevel` do, so the files still
 //! load in the original game and editor.
 //!
-//! [`canvas`] turns pointer gestures into these edits.
+//! [`canvas`] turns pointer gestures into these edits. [`proof`] keeps a way
+//! to win the level and [`stamp`] keeps blocks of cells to use again.
 
 pub mod canvas;
 pub mod links;
+pub mod proof;
+mod reader;
 pub mod settings;
 pub mod signs;
+pub mod stamp;
 
 use std::mem;
 
@@ -58,6 +62,8 @@ pub struct Clip {
     pub height: usize,
     tiles: Vec<i32>,
     objects: Vec<i32>,
+    /// The words of the signs in it, by tile.
+    signs: Vec<(i32, String)>,
 }
 
 /// One cell's old contents.
@@ -347,11 +353,17 @@ impl Editor {
                 .flat_map(|y| grid[self.level.index(x, y)..][..width].to_vec())
                 .collect()
         };
+        let tiles = rows(&self.level.tiles);
+        let signs = tiles.iter().filter(|&&t| signs::is_sign(t));
+        let signs = signs
+            .map(|&t| (t, self.sign_text((t - signs::SIGN) as usize).to_owned()))
+            .collect();
         Clip {
             width,
             height,
-            tiles: rows(&self.level.tiles),
+            tiles,
             objects: rows(&self.level.objects),
+            signs,
         }
     }
 

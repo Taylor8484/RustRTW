@@ -13,7 +13,8 @@
 //! (`SavePlayer`). The player is the menus' [`Menu::profile`].
 //!
 //! A custom level (`CurrentLevel=-999`) goes back to the custom level
-//! menu when won. Its record is the player's score for its map id, and a
+//! menu when won, with the cursor on the next level if it is in a folder,
+//! which is how a pack is played. Its record is the player's score for its map id, and a
 //! win is kept only in English, as `ControlCoins` has no code for it in
 //! the other languages; the player is saved either way.
 //!
@@ -28,7 +29,9 @@
 //! player (`--level`), selecting a level goes to the main menu too.
 //!
 //! A test play from the editor ([`Editing`]) records nothing, and a win or
-//! leaving through the in-game menu goes back to [`Phase::Editor`].
+//! leaving through the in-game menu goes back to [`Phase::Editor`]. A lost
+//! test play starts afresh, with the session it began with, so that its keys
+//! can be played again.
 //!
 //! [`Menu::level`]: crate::menu::Menu::level
 //! [`Menu::profile`]: crate::menu::Menu::profile
@@ -36,8 +39,9 @@
 use bevy::prelude::*;
 use wonderland_campaign::custom;
 use wonderland_campaign::worlds::Content;
+use wonderland_editor::proof::{Recording, fair};
 use wonderland_formats::Level;
-use wonderland_logic::{Completion, Event, Session};
+use wonderland_logic::{Completion, Event, Options, Session};
 
 use crate::audio::MenuSounds;
 use crate::editor_scene::Editing;
@@ -139,19 +143,20 @@ pub fn begin(
     record: Option<i32>,
 ) -> Result<(LevelData, Sim), String> {
     let level = data.load_content_level(content, path)?;
-    let sim = start(data, &level, session, now_ms, record)?;
+    let sim = start(data, &level, data.options, session, now_ms, record)?;
     Ok((level, sim))
 }
 
-/// Starts `level` from memory: the resources [`Phase::Game`] plays.
+/// Starts `level` from memory, under [`fair`] options as its keys may be
+/// played again: the resources [`Phase::Game`] plays.
 pub fn begin_memory(
     data: &GameData,
     level: Level,
-    session: Session,
     now_ms: i64,
 ) -> Result<(LevelData, Sim), String> {
     let level = data.memory_level(level)?;
-    let sim = start(data, &level, session, now_ms, None)?;
+    let options = fair(data.options);
+    let sim = start(data, &level, options, Session::default(), now_ms, None)?;
     Ok((level, sim))
 }
 
@@ -159,11 +164,12 @@ pub fn begin_memory(
 fn start(
     data: &GameData,
     level: &LevelData,
+    options: Options,
     session: Session,
     now_ms: i64,
     record: Option<i32>,
 ) -> Result<Sim, String> {
-    let mut sim = Sim::start(data, level, session, now_ms)?;
+    let mut sim = Sim::start(data, level, options, session, now_ms)?;
     sim.world.record = record;
     Ok(sim)
 }
@@ -242,8 +248,17 @@ fn finish_level(
     match sim.world.completion {
         Completion::Restart => {
             // `StartLevel(CurrentLevel)`.
-            match start(&data, &level, session(), now_ms(&time), record) {
-                Ok(new) => *sim = new,
+            let options = sim.world.options;
+            let again = if testing {
+                Session::default()
+            } else {
+                session()
+            };
+            match start(&data, &level, options, again, now_ms(&time), record) {
+                Ok(mut new) => {
+                    new.recording = sim.recording.as_ref().map(|_| Recording::default());
+                    *sim = new;
+                }
                 Err(e) => error!("{e}"),
             }
             rebuild(&mut commands, &entities);
@@ -256,6 +271,7 @@ fn finish_level(
             if let Some(state) = &mut state {
                 let menu = &mut state.menu;
                 if menu.level == custom::LEVEL {
+                    menu.next_custom();
                     menu.start(CUSTOM_LEVELS);
                 } else {
                     menu.level += 1;
@@ -276,7 +292,14 @@ fn finish_level(
                     level.clone()
                 }
             };
-            match start(&data, &new_level, session(), now_ms(&time), None) {
+            match start(
+                &data,
+                &new_level,
+                data.options,
+                session(),
+                now_ms(&time),
+                None,
+            ) {
                 Ok(new) => {
                     info!("level {}", new_level.name);
                     *sim = new;

@@ -5,7 +5,7 @@ use wonderland_formats::catalogue::Layer;
 
 use crate::Editor;
 
-const SIGN: i32 = 1300;
+pub(crate) const SIGN: i32 = 1300;
 /// `SignText$`.
 pub const MAX_SIGNS: usize = 20;
 /// `EditSignLoop`: four lines, stored with `#` between them.
@@ -26,7 +26,7 @@ pub fn stored_sign(lines: &str) -> String {
     lines.join("#")
 }
 
-fn is_sign(code: i32) -> bool {
+pub(crate) fn is_sign(code: i32) -> bool {
     (SIGN..SIGN + MAX_SIGNS as i32).contains(&code)
 }
 

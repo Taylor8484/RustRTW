@@ -151,3 +151,35 @@ fn warnings_on_shipped_levels() {
     let total: usize = seen.values().map(Vec::len).sum();
     assert!(total <= 4, "false alarms: {seen:?}");
 }
+
+/// The same keys under the same options end in the same place, on the busiest
+/// shipped level. `-- --nocapture` shows how long a long check takes.
+#[test]
+fn a_run_repeats_exactly() {
+    use wonderland_editor::proof::fair;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/RTWP");
+    if !dir.is_dir() {
+        eprintln!("skipping: {} not found", dir.display());
+        return;
+    }
+    let assets = GameAssets::open(&dir).unwrap();
+    let pack = assets.pack().unwrap();
+    let is_level = |name: &str| name.to_lowercase().ends_with(".lev");
+    let levels = pack.index().entries().iter().filter(|e| is_level(&e.name));
+    let big = levels
+        .map(|e| Level::parse(pack.entry_data(e), Game::Rtwp).unwrap())
+        .max_by_key(|l| l.objects.iter().filter(|&&o| o != 0).count())
+        .unwrap();
+    let level = Editor::open(big).playable();
+    let options = fair(Options::default());
+    let keys = |tick: u32| Input::from_bits(((tick / 40) % 16) as u8);
+    let play = || {
+        let mut world = World::start(&level, Ruleset::rtwp(), options, Session::default()).unwrap();
+        (0..30_000).for_each(|t| world.step(keys(t)));
+        world
+    };
+    let started = std::time::Instant::now();
+    let first = play();
+    println!("30000 ticks in {:?}", started.elapsed());
+    assert_eq!(first, play());
+}

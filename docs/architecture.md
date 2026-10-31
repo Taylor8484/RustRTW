@@ -192,6 +192,14 @@ cells moved so that the screen can keep the picture still.
 them in the header or as pieces: weather, tint and house style go on the outer
 wall, and the 3D view on a floor cell. `signs` hands out the 20 text slots as
 signs are placed, and gives a pasted sign its own slot and the same words.
+`proof` keeps a level's `Solution`: the keys of a won test play, which count
+only if they win again, and the cells the players took. `check` plays them on
+the level as it stands, under `fair` options and the default session as the
+options change the random numbers, and reports the win or where the path was
+left. It holds one `World` and runs for the solution's ticks, at most an hour
+of play. It is saved as `<NAME>.WIN` beside the level, so the level file stays
+one the original reads. `stamp` keeps a `Clip` as a file in `EditorStamps`, with
+its signs' words; putting one down gives each sign a free slot.
 `links` reads what connects pieces (a button's target, a pair of teleporters)
 for drawing, sets it when a link is drawn, and `warnings` reports what will not
 work: no exit, a lone teleporter, a button or gate with no partner, an empty
@@ -319,7 +327,13 @@ pinned and upgraded deliberately.
   above onto the canvas; it changes nothing itself, but asks through
   `Studio::request`, as the keys do. Clicking a piece opens a popup with its
   choices and a sign's text, and a panel holds the level's settings and
-  warnings. Saves go to `CustomLevels/<NAME>.LV6`.
+  warnings. Saves go to `CustomLevels/<NAME>.LV6`, or the pack the level is in.
+  A win of a test play from the start becomes the level's solution, and
+  `editor_check` checks it on a thread of its own after each edit, one check at
+  a time, and a pack's levels in turn for the pack dialog. A pack
+  (`campaign::pack`) is a folder in `CustomLevels`, which the original lists
+  too, in name order: each file's name starts with its place, and changing the
+  order renames the files and their solutions.
   Test play starts a tidied copy from memory, from the level's start or the
   pointer, so nothing is written; while `Editing` exists a win or leaving
   through the in-game menu returns to the editor and no score is kept.

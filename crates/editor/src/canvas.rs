@@ -29,6 +29,8 @@ pub enum Tool {
     Erase,
     /// Draws a connection from one piece to another.
     Link,
+    /// Puts down the stamp picked.
+    Stamp,
 }
 
 /// A block of cells inside the level.
@@ -123,6 +125,7 @@ pub struct Canvas {
     gesture: Option<Gesture>,
     selection: Option<Block>,
     clip: Option<Clip>,
+    stamp: Option<Clip>,
     /// How far growing has moved the cells, since last taken.
     shift: (usize, usize),
     /// The part of `shift` the pending edit made.
@@ -253,6 +256,14 @@ impl Canvas {
         let brush = match tool {
             Tool::Brush(brush) => Some(brush),
             Tool::Erase => None,
+            Tool::Stamp => {
+                if let Some(stamp) = self.stamp.clone() {
+                    self.drop_clip(editor, cell, &stamp, true);
+                    self.selection = None;
+                    self.finish(editor);
+                }
+                return;
+            }
             Tool::Link => {
                 self.gesture = Some(Gesture::Link {
                     from: cell,
@@ -368,7 +379,7 @@ impl Canvas {
                         block.x as isize + to.0 - from.0,
                         block.y as isize + to.1 - from.1,
                     );
-                    if !self.drop_clip(editor, at, &clip) {
+                    if !self.drop_clip(editor, at, &clip, false) {
                         return self.cancel(editor);
                     }
                 }
@@ -429,8 +440,9 @@ impl Canvas {
     }
 
     /// Puts `clip` with its corner at `at` and selects it, growing the level
-    /// to hold it. Leaves the edit pending.
-    fn drop_clip(&mut self, editor: &mut Editor, at: Cell, clip: &Clip) -> bool {
+    /// to hold it. Leaves the edit pending. A `stamped` clip comes from
+    /// outside the level, so its signs need slots.
+    fn drop_clip(&mut self, editor: &mut Editor, at: Cell, clip: &Clip, stamped: bool) -> bool {
         let Some(moved) = editor.fit(at.0, at.1, clip.width, clip.height) else {
             return false;
         };
@@ -439,7 +451,12 @@ impl Canvas {
             (at.0 + moved.0 as isize) as usize,
             (at.1 + moved.1 as isize) as usize,
         );
-        editor.paste(x, y, clip);
+        if stamped {
+            let own = editor.own_signs(clip);
+            editor.paste(x, y, &own);
+        } else {
+            editor.paste(x, y, clip);
+        }
         editor.split_signs();
         editor.tuck_settings();
         self.selection = Some(Block {
@@ -449,6 +466,23 @@ impl Canvas {
             height: clip.height,
         });
         true
+    }
+
+    /// Takes up a stamp, which the left button then puts down.
+    pub fn pick_stamp(&mut self, stamp: Clip) {
+        self.stamp = Some(stamp);
+        self.tool = Tool::Stamp;
+    }
+
+    /// The width and height of the stamp picked.
+    pub fn stamp_size(&self) -> Option<(usize, usize)> {
+        self.stamp.as_ref().map(|s| (s.width, s.height))
+    }
+
+    /// The selection, as a clip that can leave the level.
+    pub fn selected_clip(&self, editor: &Editor) -> Option<Clip> {
+        let b = self.selection?;
+        Some(editor.copy(b.x, b.y, b.width, b.height))
     }
 
     /// Keeps the selection for [`Canvas::paste`].
@@ -480,7 +514,7 @@ impl Canvas {
         let Some(clip) = self.clip.clone() else {
             return false;
         };
-        let done = self.drop_clip(editor, cell, &clip);
+        let done = self.drop_clip(editor, cell, &clip, false);
         self.finish(editor);
         done
     }

@@ -3,8 +3,9 @@
 //! steps the world that many times.
 
 use bevy::prelude::*;
+use wonderland_editor::proof::Recording;
 use wonderland_logic::world::Lights;
-use wonderland_logic::{Clock, Completion, Event, Input, Session, World};
+use wonderland_logic::{Clock, Completion, Event, Input, Options, Session, World};
 
 use crate::flow::Phase;
 use crate::game_menu::GameMenu;
@@ -29,6 +30,8 @@ pub struct Sim {
     pub menu: Option<GameMenu>,
     /// TOW's ending, when that is what the level is playing.
     pub ending: Option<TowEnding>,
+    /// The keys so far, in a test play from the level's start.
+    pub recording: Option<Recording>,
 }
 
 impl Sim {
@@ -36,10 +39,11 @@ impl Sim {
     pub fn start(
         data: &GameData,
         level: &LevelData,
+        options: Options,
         session: Session,
         now_ms: i64,
     ) -> Result<Self, String> {
-        let world = World::start(&level.level, level.ruleset.clone(), data.options, session)
+        let world = World::start(&level.level, level.ruleset.clone(), options, session)
             .map_err(|e| format!("{}: {e}", level.name))?;
         let events = world.events().to_vec();
         Ok(Self {
@@ -50,6 +54,7 @@ impl Sim {
             events,
             menu: None,
             ending: None,
+            recording: None,
         })
     }
 
@@ -168,7 +173,12 @@ fn step(
         let sim = &mut *sim;
         match &mut sim.ending {
             Some(ending) => ending.tick(&mut sim.world),
-            None => sim.world.step(input),
+            None => {
+                sim.world.step(input);
+                if let Some(recording) = &mut sim.recording {
+                    recording.push(input);
+                }
+            }
         }
         let events = sim.world.events().to_vec();
         sim.events.extend(events);

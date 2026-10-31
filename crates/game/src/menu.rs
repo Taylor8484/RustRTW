@@ -1414,6 +1414,16 @@ impl Menu {
         Some(CustomLevels::game_path(&self.custom_dir, &e.name))
     }
 
+    /// A level in a folder was won: the cursor goes to the next one there, so
+    /// that a pack plays in order. The original leaves it where it was.
+    pub fn next_custom(&mut self) {
+        let next = usize::try_from(self.current_file + 1).ok();
+        let next = next.and_then(|i| self.files.get(i));
+        if !self.custom_dir.is_empty() && next.is_some_and(FileEntry::is_level) {
+            self.current_file += 1;
+        }
+    }
+
     /// The custom level `CurrentFileDir`, while one is played.
     pub fn custom_file(&self) -> Option<&FileEntry> {
         if self.level != custom::LEVEL {
@@ -3485,6 +3495,25 @@ mod tests {
         m.end();
         m.start(CUSTOM_LEVELS);
         (m, dir)
+    }
+
+    #[test]
+    fn a_win_in_a_folder_moves_the_cursor_on() {
+        let (mut m, dir) = custom_menu("next", 3);
+        m.level = custom::LEVEL;
+        // In `CustomLevels` itself, as in the original, it stays.
+        m.current_file = 2;
+        m.next_custom();
+        assert_eq!(m.current_file, 2);
+
+        m.custom_dir = vec!["PACK".to_owned()];
+        m.next_custom();
+        assert_eq!(m.current_file, 3);
+        // There is no level after the last one.
+        m.current_file = m.files.len() as i32 - 1;
+        m.next_custom();
+        assert_eq!(m.current_file, m.files.len() as i32 - 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

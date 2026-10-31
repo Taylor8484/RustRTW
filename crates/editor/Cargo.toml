@@ -9,8 +9,6 @@ publish.workspace = true
 
 [dependencies]
 wonderland-formats = { path = "../formats" }
-
-[dev-dependencies]
 wonderland-logic = { path = "../logic" }
 
 [lints]

@@ -23,6 +23,10 @@ use crate::profile::{ExtraRecord, Lenient};
 /// The folder the levels are in, under the game folder.
 pub const FOLDER: &str = "CustomLevels";
 
+/// The extension of a level's saved solution, beside it. No one but the
+/// editor reads it.
+pub const SOLUTION: &str = "WIN";
+
 /// `CurrentLevel` while a custom level is played.
 pub const LEVEL: i32 = -999;
 

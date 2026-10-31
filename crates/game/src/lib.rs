@@ -36,6 +36,7 @@
 pub mod audio;
 pub mod camera;
 pub mod coords;
+pub mod editor_check;
 pub mod editor_scene;
 pub mod editor_ui;
 pub mod ending;
