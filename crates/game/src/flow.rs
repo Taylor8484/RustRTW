@@ -27,15 +27,20 @@
 //! Esc opens the in-game menu ([`GameMenu`]) over the level. With no
 //! player (`--level`), selecting a level goes to the main menu too.
 //!
+//! A test play from the editor ([`Editing`]) records nothing, and a win or
+//! leaving through the in-game menu goes back to [`Phase::Editor`].
+//!
 //! [`Menu::level`]: crate::menu::Menu::level
 //! [`Menu::profile`]: crate::menu::Menu::profile
 
 use bevy::prelude::*;
 use wonderland_campaign::custom;
 use wonderland_campaign::worlds::Content;
+use wonderland_formats::Level;
 use wonderland_logic::{Completion, Event, Session};
 
 use crate::audio::MenuSounds;
+use crate::editor_scene::Editing;
 use crate::game_menu::{Choice, GameMenu};
 use crate::level::{GameData, LevelData};
 use crate::menu::{CUSTOM_LEVELS, MAIN, Menu, MenuSound};
@@ -51,6 +56,8 @@ pub enum Phase {
     #[default]
     Menu,
     Game,
+    /// The level editor, between test plays.
+    Editor,
 }
 
 /// `--level`'s levels to play in order, and which is being played.
@@ -99,7 +106,7 @@ pub struct FlowPlugin;
 
 impl Plugin for FlowPlugin {
     fn build(&self, app: &mut App) {
-        // `main` may have started in `Phase::Game` already.
+        // `main` may have started in another phase already.
         if !app.world().contains_resource::<State<Phase>>() {
             app.init_state::<Phase>();
         }
@@ -130,6 +137,18 @@ pub fn begin(
     Ok((level, sim))
 }
 
+/// Starts `level` from memory: the resources [`Phase::Game`] plays.
+pub fn begin_memory(
+    data: &GameData,
+    level: Level,
+    session: Session,
+    now_ms: i64,
+) -> Result<(LevelData, Sim), String> {
+    let level = data.memory_level(level)?;
+    let sim = start(data, &level, session, now_ms, None)?;
+    Ok((level, sim))
+}
+
 /// `StartLevel`, with the player's best score for the level.
 fn start(
     data: &GameData,
@@ -145,8 +164,13 @@ fn start(
 
 /// A won level of the player's: the better score and the perfect flag go
 /// into the profile, which is then saved.
-fn record_wins(sim: Res<Sim>, playlist: Option<Res<Playlist>>, state: Option<ResMut<MenuState>>) {
-    let Some(mut state) = state.filter(|_| playlist.is_none()) else {
+fn record_wins(
+    sim: Res<Sim>,
+    playlist: Option<Res<Playlist>>,
+    editing: Option<Res<Editing>>,
+    state: Option<ResMut<MenuState>>,
+) {
+    let Some(mut state) = state.filter(|_| playlist.is_none() && editing.is_none()) else {
         return;
     };
     let menu = &mut state.menu;
@@ -199,13 +223,15 @@ fn finish_level(
     data: Res<GameData>,
     mut level: ResMut<LevelData>,
     playlist: Option<ResMut<Playlist>>,
+    editing: Option<Res<Editing>>,
     state: Option<ResMut<MenuState>>,
     mut next: ResMut<NextState<Phase>>,
     time: Res<Time<Real>>,
     entities: Query<Entity, With<LevelEntity>>,
 ) {
     let session = || -> Session { sim.world.session.clone() };
-    let mut state = state.filter(|_| playlist.is_none());
+    let testing = editing.is_some();
+    let mut state = state.filter(|_| playlist.is_none() && !testing);
     let record = state.as_ref().and_then(|s| record(&s.menu));
     match sim.world.completion {
         Completion::Restart => {
@@ -216,6 +242,7 @@ fn finish_level(
             }
             rebuild(&mut commands, &entities);
         }
+        Completion::Done if testing => next.set(Phase::Editor),
         Completion::Done if state.is_some() => {
             // `CurrentLevel=CurrentLevel+1`, `StartMenu(4)` (TOW's
             // `StartMenu(8)` in the playground), or `StartMenu(14)` after
@@ -258,12 +285,14 @@ fn finish_level(
 }
 
 /// Esc during play (`StartMenu(5)`), and `MenuLoop5` while it is open.
+#[allow(clippy::too_many_arguments)]
 fn game_menu(
     keys: Res<ButtonInput<KeyCode>>,
     pad: Res<Pad>,
     mut sim: ResMut<Sim>,
     mut menu: ResMut<MenuState>,
     playlist: Option<Res<Playlist>>,
+    editing: Option<Res<Editing>>,
     mut next: ResMut<NextState<Phase>>,
     mut sounds: ResMut<MenuSounds>,
 ) {
@@ -298,6 +327,7 @@ fn game_menu(
     match choice {
         Choice::Restart => sim.world.kill_players(),
         Choice::Resume => sim.world.check_signs(),
+        Choice::SelectLevel | Choice::Exit if editing.is_some() => next.set(Phase::Editor),
         Choice::SelectLevel | Choice::Exit => {
             let menu = &mut menu.menu;
             menu.hold_keys();

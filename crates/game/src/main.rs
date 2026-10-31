@@ -1,4 +1,4 @@
-//! `wonderland [--assets <dir>] [--level <name>] [--windowed]
+//! `wonderland [--assets <dir>] [--level <name>] [--edit] [--windowed]
 //! [--pillarbox] [--backend <name>]`
 //!
 //! Starts Return to Wonderland Platinum at its title screen, or with
@@ -7,7 +7,8 @@
 //! `$WL_ASSETS`, else `assets`, else `assets` beside the executable). The window takes its size and full
 //! screen setting from `options.cfg` as the original does; `--windowed`
 //! keeps it in a window. Wide screens show more at the sides;
-//! `--pillarbox` keeps the original's 4:3 picture with black bars.
+//! `--pillarbox` keeps the original's 4:3 picture with black bars. `--edit`
+//! starts in the level editor, on `--level`'s level or a new one.
 
 // No console window behind the game. `fail` covers what it would have shown.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -25,8 +26,11 @@ use bevy::window::ExitCondition;
 use bevy::window::WindowMode;
 use bevy::winit::WinitPlugin;
 use wonderland_campaign::worlds::Worlds;
+use wonderland_editor::Editor;
+use wonderland_formats::Level;
 use wonderland_game::GamePlugins;
 use wonderland_game::camera::Pillarbox;
+use wonderland_game::editor_scene::Editing;
 use wonderland_game::flow::{Phase, Playlist, begin};
 use wonderland_game::level::{GameData, default_assets_dir};
 use wonderland_game::menu::GFX_MODES;
@@ -37,18 +41,20 @@ use wonderland_logic::Session;
 struct Args {
     assets: PathBuf,
     level: Option<String>,
+    edit: bool,
     windowed: bool,
     pillarbox: bool,
     backends: Option<Backends>,
 }
 
-const USAGE: &str = "usage: wonderland [--assets <dir>] [--level <name>] [--windowed] [--pillarbox] \
-                     [--backend dx12|vulkan|gl]";
+const USAGE: &str = "usage: wonderland [--assets <dir>] [--level <name>] [--edit] [--windowed] \
+                     [--pillarbox] [--backend dx12|vulkan|gl]";
 
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         assets: default_assets_dir(),
         level: None,
+        edit: false,
         windowed: false,
         pillarbox: false,
         backends: None,
@@ -62,6 +68,7 @@ fn parse_args() -> Result<Args, String> {
         match a.as_str() {
             "--assets" => args.assets = PathBuf::from(value()?).join("RTWP"),
             "--level" => args.level = Some(value()?),
+            "--edit" => args.edit = true,
             "--windowed" => args.windowed = true,
             "--pillarbox" => args.pillarbox = true,
             "--backend" => {
@@ -98,6 +105,14 @@ fn fail(message: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// The level `name` finds, as its game reads it.
+fn open_level(data: &GameData, name: &str) -> Result<Level, String> {
+    let (content, path) = data
+        .find_level(name)
+        .ok_or_else(|| format!("no such level: {name}"))?;
+    Ok(data.load_content_level(content, &path)?.level)
+}
+
 fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(a) => a,
@@ -120,9 +135,19 @@ fn main() -> ExitCode {
             missing.join(", ")
         ));
     }
+    let edit = if args.edit {
+        match args.level.as_deref().map(|n| open_level(&data, n)) {
+            None => Some(Editor::new()),
+            Some(Ok(level)) => Some(Editor::open(level)),
+            Some(Err(e)) => return fail(&e),
+        }
+    } else {
+        None
+    };
     // `--level`: straight into play, skipping the menus.
     let start = match &args.level {
         None => None,
+        Some(_) if args.edit => None,
         Some(n) => {
             let Some((content, name)) = data.find_level(n) else {
                 return fail(&format!("no such level: {n}"));
@@ -190,6 +215,10 @@ fn main() -> ExitCode {
             .insert_resource(sim)
             .insert_resource(playlist)
             .insert_state(Phase::Game);
+    }
+    if let Some(editor) = edit {
+        app.insert_resource(Editing(editor))
+            .insert_state(Phase::Editor);
     }
     if args.pillarbox {
         app.insert_resource(Pillarbox);

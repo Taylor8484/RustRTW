@@ -55,6 +55,7 @@ xmrsplayer = "0.15"
 wonderland-formats = { path = "../formats" }
 wonderland-logic = { path = "../logic" }
 wonderland-campaign = { path = "../campaign" }
+wonderland-editor = { path = "../editor" }
 
 # wgpu's OpenGL backend, the last fallback on Linux (on Windows it would
 # need ANGLE, so Vulkan is the fallback there).

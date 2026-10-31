@@ -5856,6 +5856,7 @@ dependencies = [
  "bevy_render",
  "image",
  "wonderland-campaign",
+ "wonderland-editor",
  "wonderland-formats",
  "wonderland-logic",
  "xmrs",

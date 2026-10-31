@@ -146,6 +146,16 @@ impl GameData {
             Content::Rtwp => Ruleset::rtwp(),
             Content::Tow => Ruleset::tow(),
         };
+        self.set_up(name, level, ruleset)
+    }
+
+    /// A level held in memory, set up under RTWP's rules: no file is read.
+    pub fn memory_level(&self, level: Level) -> Result<LevelData, String> {
+        let name = level.file_name.clone();
+        self.set_up(&name, level, Ruleset::rtwp())
+    }
+
+    fn set_up(&self, name: &str, level: Level, ruleset: Ruleset) -> Result<LevelData, String> {
         let setup =
             Setup::load(&level, &ruleset, self.options.load).map_err(|e| format!("{name}: {e}"))?;
         Ok(LevelData {

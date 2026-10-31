@@ -106,6 +106,18 @@ impl Plugin for MenuScenePlugin {
     }
 }
 
+#[cfg(test)]
+impl MenuState {
+    /// `menu` with no window behind it.
+    pub(crate) fn of(menu: Menu, data: &GameData) -> Self {
+        Self {
+            menu,
+            clock: Clock::new(&data.ruleset, 0),
+            quitting: None,
+        }
+    }
+}
+
 fn now_ms(time: &Time<Real>) -> i64 {
     time.elapsed().as_millis() as i64
 }

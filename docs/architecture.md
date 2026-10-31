@@ -181,7 +181,8 @@ New levels, sizes (14 to 99 a side) and growing and shrinking follow
 than plain wall. `fit` grows the level around a block placed off it and
 reports how far the cells moved. `save` tidies as `checklevel` does (first of
 each character kept, Stinky at (1, 1) if there are none) and returns the file;
-the caller supplies a new map id. `tests/real_levels.rs` runs random edits on
+the caller supplies a new map id. `playable` gives the same tidied level for
+test play and leaves the edit alone. `tests/real_levels.rs` runs random edits on
 every shipped RTWP level, walks undo and redo back and forth, and starts what
 it saves.
 
@@ -282,7 +283,8 @@ pinned and upgraded deliberately.
   draws `hud::Screen` in the game's bitmap font (UI image nodes on
   `DisplayText`'s 50-column grid): the coin/bonus/time line and the signs
   in play, the menu text, selector bar and logos in the menus;
-  `FlowPlugin` holds the `Phase` (`GamePhase`: menus or play), gives
+  `FlowPlugin` holds the `Phase` (`GamePhase`: menus or play, plus the
+  editor), gives
   each level the player's record, keeps a won level's score and saves
   the player, restarts a lost level, goes back to the level selector
   with the next level after a win (to the custom levels after a custom
@@ -292,6 +294,11 @@ pinned and upgraded deliberately.
   through a `Playlist` in pack order;
   `MenuScenePlugin` runs the menus and draws their background. The level
   plugins run only in `Phase::Game`.
+- **Editor:** `--edit` starts in `Phase::Editor`, on `--level`'s level or a
+  new one, held in the `Editing` resource. There is no canvas yet. Test play
+  starts a copy of the level from memory, tidied as saving tidies it, so
+  nothing is written; while `Editing` exists a win or leaving through the
+  in-game menu returns to the editor and no score is kept.
 - **Menus:** `menu` is the menus' state and logic with no Bevy types
   (`StartMenu`, `EndMenu`, each `MenuLoopN` as one frame, the text by
   tag, `MenuBkgUpdate`), so it is unit tested; it returns `Action`s

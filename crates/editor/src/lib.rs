@@ -437,6 +437,14 @@ impl Editor {
         self.level.to_bytes()
     }
 
+    /// The level to test play: tidied as [`Editor::save`] tidies, without
+    /// touching the level being edited or its history.
+    pub fn playable(&self) -> Level {
+        let mut copy = Self::open(self.level.clone());
+        copy.tidy();
+        copy.level
+    }
+
     /// Keeps the first of each character, and puts Stinky at (1, 1) if there
     /// are none.
     fn tidy(&mut self) {
@@ -684,6 +692,21 @@ mod tests {
         assert_eq!(editor.level().object(5, 5), 0);
         assert!(editor.undo());
         assert_eq!(editor.level().object(5, 5), STINKY);
+    }
+
+    #[test]
+    fn playable_tidies_a_copy() {
+        let mut editor = Editor::new();
+        editor.place(3, 3, Layer::Object, COIN);
+        let level = editor.playable();
+        assert_eq!(level.object(1, 1), STINKY);
+        assert_eq!(level.object(3, 3), COIN);
+        assert_eq!(editor.level().object(1, 1), 0);
+        // The pending edit is still pending, and still undoes as one.
+        editor.commit();
+        assert!(editor.undo());
+        assert_eq!(editor.level().object(3, 3), 0);
+        assert!(!editor.undo());
     }
 
     #[test]

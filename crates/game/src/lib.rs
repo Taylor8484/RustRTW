@@ -22,8 +22,9 @@
 //!
 //! - [`hud::HudPlugin`]: draws [`hud::Screen`]: the coin and time display
 //!   and the signs, or the menu text.
-//! - [`flow::FlowPlugin`]: the [`flow::Phase`] (menus or play), restarts a
-//!   lost level, moves on from a won one.
+//! - [`flow::FlowPlugin`]: the [`flow::Phase`] (menus, play or editor),
+//!   restarts a lost level, moves on from a won one.
+//! - [`editor_scene::EditorPlugin`]: the level editor, and test play.
 //! - [`menu_scene::MenuScenePlugin`]: runs [`menu`] and draws its 3D
 //!   background.
 //! - [`ending_scene::EndingScenePlugin`]: draws the endings.
@@ -34,6 +35,7 @@
 pub mod audio;
 pub mod camera;
 pub mod coords;
+pub mod editor_scene;
 pub mod ending;
 pub mod ending_scene;
 pub mod flow;
@@ -74,6 +76,7 @@ impl Plugin for GamePlugins {
             particles::ParticlesPlugin,
             hud::HudPlugin,
             flow::FlowPlugin,
+            editor_scene::EditorPlugin,
             menu_scene::MenuScenePlugin,
             ending_scene::EndingScenePlugin,
             shot::ShotPlugin,
