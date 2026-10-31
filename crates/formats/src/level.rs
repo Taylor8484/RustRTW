@@ -18,7 +18,7 @@
 //! while building the level (sign, electro, spike and other tiles become
 //! floor, background 10 becomes 11), and that belongs to level setup, not here.
 
-use crate::blitz::BlitzReader;
+use crate::blitz::{BlitzReader, BlitzWriter};
 use crate::{Error, Game, Result};
 
 /// A level file's contents, as stored.
@@ -162,6 +162,45 @@ impl Level {
         })
     }
 
+    /// The file bytes, the reverse of [`Level::parse`]. The optional fields
+    /// decide the layout, so a parsed level comes back byte for byte.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = BlitzWriter::new();
+        w.write_string(&self.magic);
+        w.write_string(&self.file_name);
+        if let Some(id) = self.map_id {
+            w.write_int(id);
+        }
+        w.write_string(&self.description);
+        for dir in [
+            &self.houses,
+            &self.models,
+            &self.textures,
+            &self.backgrounds,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            w.write_int(dir.flag);
+            w.write_string(&dir.dir);
+        }
+        w.write_int(self.time);
+        w.write_int(self.style);
+        w.write_int(self.background);
+        w.write_int(self.width as i32);
+        w.write_int(self.height as i32);
+        for &code in self.tiles.iter().chain(&self.objects) {
+            w.write_int(code);
+        }
+        for sign in &self.signs {
+            w.write_string(sign);
+        }
+        if let Some(track) = self.music_track {
+            w.write_int(track);
+        }
+        w.into_bytes()
+    }
+
     /// Index of tile `(x, y)` in `tiles` and `objects`.
     pub fn index(&self, x: usize, y: usize) -> usize {
         debug_assert!(x < self.width && y < self.height);
@@ -279,6 +318,30 @@ mod tests {
             Level::parse(&data, Game::Wsw),
             Err(Error::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn to_bytes_reverses_parse() {
+        let v1 = level(
+            "Stinky & Loof Level File",
+            |w| {
+                w.string("a.lev").string("First");
+            },
+            5,
+            false,
+        );
+        let v6 = level(
+            "Stinky & Loof Level File v6",
+            |w| {
+                w.string("a.lv5").int(1).string("Third");
+                w.int(1).string("h").int(0).string("m");
+                w.int(1).string("t").int(1).string("b");
+            },
+            20,
+            true,
+        );
+        assert_eq!(Level::parse(&v1, Game::Tow).unwrap().to_bytes(), v1);
+        assert_eq!(Level::parse(&v6, Game::Rtwp).unwrap().to_bytes(), v6);
     }
 
     #[test]

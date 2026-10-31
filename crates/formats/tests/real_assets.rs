@@ -46,7 +46,7 @@ fn packs_load_and_every_entry_is_readable() {
 }
 
 /// Every level in each game's pack, plus TOW's loose bonus levels, parses with
-/// no bytes left over.
+/// no bytes left over and writes back byte for byte.
 #[test]
 fn every_level_parses() {
     let expected = [
@@ -78,9 +78,8 @@ fn every_level_parses() {
         }
         assert_eq!(files.len(), count, "{name}: level count");
         for (file, data) in files {
-            if let Err(e) = Level::parse(&data, game) {
-                panic!("{name}: {file}: {e}");
-            }
+            let level = Level::parse(&data, game).unwrap_or_else(|e| panic!("{name}: {file}: {e}"));
+            assert!(level.to_bytes() == data, "{name}: {file}: bytes differ");
         }
     }
 }
