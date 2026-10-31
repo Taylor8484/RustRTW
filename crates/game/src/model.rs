@@ -161,6 +161,9 @@ pub enum ModelId {
     Fish,
     /// `PillarMesh(n)`.
     Pillar(usize),
+    /// One surface of a level's own `PillarMesh(n)`, from its custom
+    /// models folder: `n`, then the surface.
+    CustomPillar(usize, usize),
     /// A round shadow (`CreateFlatSquare(RoundShadowTexture)`).
     Shadow,
     /// A flat square for overlays (breakaway tiles, switchers, buttons,
@@ -305,7 +308,7 @@ pub fn model_def(id: ModelId) -> ModelDef {
             .bake(Rotate([-90.0, 0.0, 0.0])),
         ModelId::Fish => ModelDef::new(File("graphics\\fish.x"), t("graphics\\fish.bmp", 1))
             .bake(Fit([-0.5; 3], [1.0; 3])),
-        ModelId::Pillar(n) => pillar_def(n),
+        ModelId::Pillar(n) | ModelId::CustomPillar(n, _) => pillar_def(n),
         ModelId::Shadow => ModelDef::new(FlatSquare, t("graphics\\beachballshadow.bmp", 2)),
         ModelId::Square => ModelDef::new(FlatSquare, None),
     }
@@ -319,7 +322,8 @@ fn pillar_def(n: usize) -> ModelDef {
     let t = |path: &'static str| Some((path, 1));
     let up = Rotate([-90.0, 0.0, 0.0]);
     match n {
-        0 => ModelDef::new(File("graphics\\pillar.3ds"), t("graphics\\pillar1.jpg"))
+        // 26–29 start as the plain pillar before every level.
+        0 | 26..=29 => ModelDef::new(File("graphics\\pillar.3ds"), t("graphics\\pillar1.jpg"))
             .turn([-90.0, 0.0, 0.0]),
         1 => ModelDef::new(File("graphics\\pyramid.3ds"), t("graphics\\pillar2.jpg"))
             .turn([-90.0, 0.0, 0.0]),
@@ -390,6 +394,8 @@ pub struct Model {
     /// Static surfaces, or an MD2's frames.
     pub surfaces: Vec<Geometry>,
     pub md2: bool,
+    /// Replaces the definition's texture, for a level's own models.
+    pub custom_texture: Option<TextureRef>,
 }
 
 impl Model {
@@ -421,10 +427,12 @@ impl Model {
 
     /// The texture the template entity is given.
     pub fn texture(&self) -> Option<TextureRef> {
-        self.def.texture.map(|(path, flags)| TextureRef {
-            path: path.to_owned(),
-            flags,
-            rotation: 0,
+        self.custom_texture.clone().or_else(|| {
+            self.def.texture.map(|(path, flags)| TextureRef {
+                path: path.to_owned(),
+                flags,
+                rotation: 0,
+            })
         })
     }
 }
@@ -713,7 +721,44 @@ pub fn load(id: ModelId, assets: &GameAssets) -> Result<Model, String> {
             }
         }
     }
-    Ok(Model { def, surfaces, md2 })
+    Ok(Model {
+        def,
+        surfaces,
+        md2,
+        custom_texture: None,
+    })
+}
+
+/// `LoadMesh` of a level's own model at the game path `path`, one model per
+/// surface so each keeps its brush: the colour, alpha and the texture Blitz
+/// finds next to the mesh, if it is there. Unlike the default pillar the
+/// mesh is not rotated.
+pub fn custom_pillar(path: &str, assets: &GameAssets) -> Result<Vec<Model>, String> {
+    let data = assets.read(path).map_err(|e| format!("{path}: {e}"))?;
+    let m = mesh::tds::parse(&data).map_err(|e| format!("{path}: {e}"))?;
+    let folder = path.rfind('\\').map_or("", |i| &path[..=i]);
+    Ok(m.surfaces
+        .iter()
+        .zip(from_mesh(&m))
+        .map(|(s, geometry)| {
+            let brush = &s.material;
+            let texture = brush.texture.as_ref().and_then(|t| {
+                let file = t.rsplit(['\\', '/']).next().unwrap_or(t);
+                let path = format!("{folder}{file}");
+                assets.resolve(&path).map(|_| TextureRef::colour(&path))
+            });
+            Model {
+                def: ModelDef {
+                    color: brush.color,
+                    alpha: brush.alpha,
+                    ..ModelDef::new(Shape::FlatSquare, None)
+                },
+                surfaces: vec![geometry],
+                md2: false,
+                custom_texture: texture,
+            }
+        })
+        .collect())
 }
 
 /// Every model, for loading up front.
@@ -755,9 +800,11 @@ pub fn all_models() -> Vec<ModelId> {
     v.extend((1..=4).map(ModelId::Player));
     v.extend((0..4).map(ModelId::LinkSphere));
     v.extend(
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 17, 18, 19, 20, 21, 22, 25]
-            .into_iter()
-            .map(ModelId::Pillar),
+        [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 17, 18, 19, 20, 21, 22, 25, 26, 27, 28, 29,
+        ]
+        .into_iter()
+        .map(ModelId::Pillar),
     );
     v
 }

@@ -87,13 +87,21 @@ impl GameData {
 
     /// Finds a level by file name, with or without its folder and
     /// extension (`intro`, `intro.lev`, `levels\intro.lev`): in RTWP's
-    /// pack, else in TOW's.
+    /// pack, else in TOW's, else as a file under the game folder
+    /// (`CustomLevels\my.lv5`).
     pub fn find_level(&self, name: &str) -> Option<(Content, String)> {
         let want = stem(name);
-        [Content::Rtwp, Content::Tow].into_iter().find_map(|c| {
-            let found = self.level_names(c).into_iter().find(|n| stem(n) == want);
-            found.map(|n| (c, n))
-        })
+        [Content::Rtwp, Content::Tow]
+            .into_iter()
+            .find_map(|c| {
+                let found = self.level_names(c).into_iter().find(|n| stem(n) == want);
+                found.map(|n| (c, n))
+            })
+            .or_else(|| {
+                self.assets
+                    .resolve(name)
+                    .map(|_| (Content::Rtwp, name.to_owned()))
+            })
     }
 
     /// Loads one of RTWP's levels.

@@ -216,6 +216,14 @@ pinned and upgraded deliberately.
   whose vertex colours are rebuilt when its turn, MD2 frame or the lights
   change (`objects`). That avoids a custom shader (Bevy 0.20 materials
   use WESL).
+- **Custom houses and models:** v5+ levels can name folders of loose files
+  in the game folder: `CustomHouses\<dir>\house<k>.jpg`,
+  `CustomModels\<dir>\model<k>.3ds` and `model<k>.jpg`, k = 1–4. Each file
+  is optional and a missing one keeps the default. `Models::set_level`
+  applies them before every level, which also restores the defaults. A
+  custom mesh is not rotated and keeps its own materials unless
+  `model<k>.jpg` exists, so each surface is drawn as its own model
+  (`ModelId::CustomPillar`). As in RTWP, pack files do not count.
 - **Objects:** `model` holds `Setup`'s model table (mesh file or Blitz
   primitive, baked `RotateMesh`/`PositionMesh`/`ScaleMesh`/`FitMesh`, the
   template's `ScaleEntity`/`RotateEntity`, colour, alpha, texture).

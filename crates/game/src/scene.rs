@@ -17,6 +17,7 @@ use crate::flow::Phase;
 use crate::level::{GameData, LevelData};
 use crate::level_mesh::{Quad, Tex, construct_background, construct_level};
 use crate::lighting;
+use crate::objects::Models;
 use crate::sim::{Sim, SimStep, TickAnim};
 use crate::style::{
     LevelTextures, TextureRef, effective_background, effective_style, level_textures,
@@ -228,7 +229,11 @@ pub fn spawn_level(
     mut cache: ResMut<TextureCache>,
     data: Res<GameData>,
     level: Res<LevelData>,
+    models: Option<ResMut<Models>>,
 ) {
+    if let Some(mut models) = models {
+        models.set_level(&level.level, &data.assets);
+    }
     let setup = &level.setup;
     let background = effective_background(setup.background);
     let style = effective_style(setup.style, background);

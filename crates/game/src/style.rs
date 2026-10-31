@@ -7,6 +7,8 @@
 //! yet, so they fall back the way the original does when the files are
 //! missing: style 9 to 2 (wood), background 11 to 3 (stars).
 
+use wonderland_formats::{GameAssets, Level};
+
 /// A texture file and the `MyLoadTexture` flags it is loaded with.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TextureRef {
@@ -20,7 +22,7 @@ pub struct TextureRef {
 }
 
 impl TextureRef {
-    fn colour(path: &str) -> Self {
+    pub fn colour(path: &str) -> Self {
         Self {
             path: path.to_owned(),
             flags: 1,
@@ -76,6 +78,18 @@ pub fn effective_style(style: i32, background: i32) -> i32 {
     } else {
         style
     }
+}
+
+/// `HouseTexture(1–4)`: the default houses, each replaced by the file of
+/// that number in the level's custom houses folder if it is there.
+pub fn house_textures(level: &Level, assets: &GameAssets) -> [String; 4] {
+    let dir = level.houses.as_ref().filter(|d| d.enabled());
+    std::array::from_fn(|i| {
+        let k = i + 1;
+        dir.map(|d| format!("customhouses\\{}\\house{k}.jpg", d.dir))
+            .filter(|path| assets.resolve(path).is_some())
+            .unwrap_or_else(|| format!("graphics\\house{k}.jpg"))
+    })
 }
 
 /// `LoadStyleTextures` plus the fixed level textures from `Setup`.

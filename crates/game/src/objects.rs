@@ -25,6 +25,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::math::Affine2;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+use wonderland_formats::{GameAssets, Level};
 use wonderland_logic::player::Skin;
 use wonderland_logic::world::Lights;
 use wonderland_logic::{Spawn, World};
@@ -33,10 +34,10 @@ use crate::coords::{triangle, vec};
 use crate::flow::Phase;
 use crate::level::{GameData, LevelData};
 use crate::lighting::light_direction;
-use crate::model::{Geometry, Model, ModelId, blitz_quat, load, player_skins};
+use crate::model::{Geometry, Model, ModelId, blitz_quat, custom_pillar, load, player_skins};
 use crate::scene::{LevelEntity, TextureCache};
 use crate::sim::{Sim, SimStep, TickAnim};
-use crate::style::{TextureRef, effective_background, effective_style};
+use crate::style::{TextureRef, effective_background, effective_style, house_textures};
 
 /// How a draw's texture coordinates differ from its model's.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,6 +117,12 @@ impl Draw {
 #[derive(Resource)]
 pub struct Models {
     map: HashMap<ModelId, Model>,
+    /// The level's own models, ahead of `map`.
+    custom: HashMap<ModelId, Model>,
+    /// `HouseTexture(1–4)`.
+    houses: [String; 4],
+    /// What `PillarMesh(26–29)` draws.
+    pillars: [Vec<ModelId>; 4],
     missing: Model,
 }
 
@@ -132,18 +139,67 @@ impl Models {
                 Err(e) => warn!("model {id:?}: {e}"),
             }
         }
+        Self::new(map)
+    }
+
+    fn new(map: HashMap<ModelId, Model>) -> Self {
         Self {
             map,
+            custom: HashMap::new(),
+            houses: std::array::from_fn(|i| format!("graphics\\house{}.jpg", i + 1)),
+            pillars: std::array::from_fn(|i| vec![ModelId::Pillar(26 + i)]),
             missing: Model {
                 def: crate::model::model_def(ModelId::Square),
                 surfaces: Vec::new(),
                 md2: false,
+                custom_texture: None,
             },
         }
     }
 
     pub fn get(&self, id: ModelId) -> &Model {
-        self.map.get(&id).unwrap_or(&self.missing)
+        self.custom
+            .get(&id)
+            .or_else(|| self.map.get(&id))
+            .unwrap_or(&self.missing)
+    }
+
+    /// Sets up `level`'s houses and pillars 26–29 as `LoadLevel` does: back
+    /// to the defaults, then whichever files its folders hold. As with
+    /// `FileType`, only loose files in the game folder count. A model that
+    /// cannot be read is reported and keeps the default.
+    pub fn set_level(&mut self, level: &Level, assets: &GameAssets) {
+        self.houses = house_textures(level, assets);
+        self.custom.clear();
+        self.pillars = std::array::from_fn(|i| vec![ModelId::Pillar(26 + i)]);
+        let Some(dir) = level.models.as_ref().filter(|d| d.enabled()) else {
+            return;
+        };
+        for k in 1..=4 {
+            let n = 25 + k;
+            let base = format!("custommodels\\{}\\model{k}", dir.dir);
+            let mesh = format!("{base}.3ds");
+            let parts = assets.resolve(&mesh).and_then(|_| {
+                custom_pillar(&mesh, assets)
+                    .inspect_err(|e| warn!("{e}"))
+                    .ok()
+            });
+            let jpg = format!("{base}.jpg");
+            let texture = assets.resolve(&jpg).map(|_| TextureRef::colour(&jpg));
+            if let Some(parts) = parts {
+                self.pillars[k - 1] = (0..parts.len())
+                    .map(|s| ModelId::CustomPillar(n, s))
+                    .collect();
+                for (s, mut part) in parts.into_iter().enumerate() {
+                    part.custom_texture = texture.clone().or(part.custom_texture);
+                    self.custom.insert(ModelId::CustomPillar(n, s), part);
+                }
+            } else if texture.is_some() {
+                let mut model = self.get(ModelId::Pillar(n)).clone();
+                model.custom_texture = texture;
+                self.custom.insert(ModelId::Pillar(n), model);
+            }
+        }
     }
 }
 
@@ -550,7 +606,7 @@ pub fn draws(w: &World, models: &Models, style: i32, anim: &TickAnim) -> Vec<Dra
         let pos = [p.x as f32 + 0.5, 0.0, -(p.y as f32 + 0.5)];
         let draw = match p.kind {
             8..=11 => {
-                let house = format!("graphics\\house{}.jpg", w.house_style.clamp(1, 4));
+                let house = &models.houses[w.house_style.clamp(1, 4) as usize - 1];
                 let yaw = match p.kind {
                     8 => 90.0,
                     10 => -90.0,
@@ -559,7 +615,7 @@ pub fn draws(w: &World, models: &Models, style: i32, anim: &TickAnim) -> Vec<Dra
                 };
                 d(ModelId::Pillar(8), pos)
                     .turn([0.0, yaw, 0.0])
-                    .texture(&house, 1)
+                    .texture(house, 1)
             }
             23 | 24 | 30 => {
                 let tex = match p.kind {
@@ -572,6 +628,11 @@ pub fn draws(w: &World, models: &Models, style: i32, anim: &TickAnim) -> Vec<Dra
                     .texture(tex, 1)
             }
             22 => d(ModelId::Pillar(22), pos).turn([0.0, p.flower_yaw as f32, 0.0]),
+            26..=29 => {
+                let parts = &models.pillars[p.kind as usize - 26];
+                out.extend(parts.iter().map(|&id| d(id, pos)));
+                continue;
+            }
             k => d(ModelId::Pillar(k.max(0) as usize), pos),
         };
         out.push(draw);
@@ -620,8 +681,14 @@ impl Plugin for ObjectsPlugin {
     }
 }
 
-fn load_models(mut commands: Commands, data: Res<GameData>) {
-    commands.insert_resource(Models::load_all(&data));
+/// `--level` builds its scene before `Startup`, so that level's art is
+/// set here; later levels set theirs in `spawn_level`.
+fn load_models(mut commands: Commands, data: Res<GameData>, level: Option<Res<LevelData>>) {
+    let mut models = Models::load_all(&data);
+    if let Some(level) = level {
+        models.set_level(&level.level, &data.assets);
+    }
+    commands.insert_resource(models);
 }
 
 /// The light factor for a Bevy-space normal, as an sRGB colour converted
@@ -869,21 +936,15 @@ mod tests {
                     def: crate::model::model_def(id),
                     surfaces: vec![crate::model::flat_square()],
                     md2: false,
+                    custom_texture: None,
                 },
             );
         }
-        Models {
-            map,
-            missing: Model {
-                def: crate::model::model_def(ModelId::Square),
-                surfaces: Vec::new(),
-                md2: false,
-            },
-        }
+        Models::new(map)
     }
 
-    fn world(tiles: &[i32], objects: &[i32]) -> World {
-        let l = wonderland_formats::Level {
+    fn level(tiles: &[i32], objects: &[i32]) -> Level {
+        Level {
             magic: "Stinky & Loof Level File v5".into(),
             version: 5,
             file_name: "t.lv5".into(),
@@ -902,7 +963,11 @@ mod tests {
             objects: objects.to_vec(),
             signs: vec![String::new(); 20],
             music_track: Some(1),
-        };
+        }
+    }
+
+    fn world(tiles: &[i32], objects: &[i32]) -> World {
+        let l = level(tiles, objects);
         World::start(&l, Ruleset::rtwp(), Options::default(), Session::default()).unwrap()
     }
 
@@ -921,6 +986,128 @@ mod tests {
         let p = list.iter().find(|d| d.model == ModelId::Player(1)).unwrap();
         assert_eq!(p.position, w.players[1].position);
         assert_eq!(p.texture.as_ref().unwrap().path, "graphics\\stinky2.bmp");
+    }
+
+    /// A game folder holding `files`, and a level naming `dir` for both
+    /// its houses and its models.
+    fn custom_folder(name: &str, files: &[(&str, &[u8])], dir: &str) -> (GameAssets, Level) {
+        let root = std::env::temp_dir().join(format!(
+            "wonderland-custom-art-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, data) in files {
+            let file = root.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, data).unwrap();
+        }
+        std::fs::create_dir_all(&root).unwrap();
+        let folder = wonderland_formats::level::CustomDir {
+            flag: 1,
+            dir: dir.to_owned(),
+        };
+        let level = Level {
+            houses: Some(folder.clone()),
+            models: Some(folder),
+            ..level(&[100], &[1])
+        };
+        (GameAssets::open(root).unwrap(), level)
+    }
+
+    #[test]
+    fn a_folder_with_some_files_keeps_the_defaults_for_the_rest() {
+        let (assets, custom) = custom_folder(
+            "partial",
+            &[
+                ("CustomHouses/TOWN/house2.jpg", b"x"),
+                ("CustomModels/TOWN/model3.jpg", b"x"),
+            ],
+            "TOWN",
+        );
+        let mut m = models();
+        m.set_level(&custom, &assets);
+        assert_eq!(m.houses[0], r"graphics\house1.jpg");
+        assert_eq!(m.houses[1], r"customhouses\TOWN\house2.jpg");
+        // A texture alone goes on the default pillar.
+        assert_eq!(m.pillars[2], [ModelId::Pillar(28)]);
+        assert_eq!(
+            m.get(ModelId::Pillar(28)).texture().unwrap().path,
+            r"custommodels\TOWN\model3.jpg"
+        );
+        assert_eq!(
+            m.get(ModelId::Pillar(26)).texture().unwrap().path,
+            r"graphics\pillar1.jpg"
+        );
+
+        // The next level gets the defaults back.
+        m.set_level(&level(&[100], &[1]), &assets);
+        assert_eq!(m.houses[1], r"graphics\house2.jpg");
+        assert_eq!(
+            m.get(ModelId::Pillar(28)).texture().unwrap().path,
+            r"graphics\pillar1.jpg"
+        );
+        std::fs::remove_dir_all(assets.dir()).unwrap();
+    }
+
+    #[test]
+    fn a_disabled_folder_or_a_broken_mesh_keeps_the_default() {
+        let (assets, mut custom) = custom_folder(
+            "broken",
+            &[
+                ("custommodels/a/model1.3ds", b"not a mesh"),
+                ("customhouses/a/house1.jpg", b"x"),
+            ],
+            "a",
+        );
+        let mut m = models();
+        m.set_level(&custom, &assets);
+        assert_eq!(m.pillars[0], [ModelId::Pillar(26)]);
+        custom.houses.as_mut().unwrap().flag = 0;
+        m.set_level(&custom, &assets);
+        assert_eq!(m.houses[0], r"graphics\house1.jpg");
+        std::fs::remove_dir_all(assets.dir()).unwrap();
+    }
+
+    #[test]
+    fn a_custom_mesh_draws_each_surface_with_its_own_brush() {
+        // The original's own example of a model with several materials.
+        let dir = crate::level::default_assets_dir().with_file_name("WSW");
+        let Ok(wsw) = GameAssets::open(&dir) else {
+            eprintln!("skipping: no game data at {}", dir.display());
+            return;
+        };
+        let name = r"custommodels\spookywalls\model1.3ds";
+        let Ok(mesh) = wsw.read(name) else {
+            eprintln!("skipping: no {name}");
+            return;
+        };
+        let wall = wsw.read(r"custommodels\spookywalls\wallf.jpg").unwrap();
+        let (assets, custom) = custom_folder(
+            "mesh",
+            &[
+                ("CustomModels/spooky/model1.3ds", &mesh),
+                ("CustomModels/spooky/wallf.jpg", &wall),
+            ],
+            "spooky",
+        );
+        let mut m = models();
+        m.set_level(&custom, &assets);
+        assert_eq!(m.pillars[0].len(), 5);
+        let parts: Vec<&Model> = m.pillars[0].iter().map(|&id| m.get(id)).collect();
+        // Not the pillar's turn, and only the texture beside the mesh.
+        assert!(parts.iter().all(|p| p.def.turns.is_empty()));
+        assert!(parts.iter().any(|p| p.texture().is_some()));
+        assert!(parts.iter().any(|p| p.texture().is_none()));
+
+        // The world's pillar 26 becomes one draw per surface.
+        let w = world(&[100; 2], &[1, 76]);
+        assert_eq!(w.pillars[0].kind, 26);
+        let list = draws(&w, &m, 2, &TickAnim::default());
+        let custom = list
+            .iter()
+            .filter(|d| matches!(d.model, ModelId::CustomPillar(26, _)));
+        assert_eq!(custom.count(), 5);
+        std::fs::remove_dir_all(assets.dir()).unwrap();
     }
 
     #[test]
