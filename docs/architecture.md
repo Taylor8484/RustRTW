@@ -182,7 +182,11 @@ than plain wall. `fit` grows the level around a block placed off it and
 reports how far the cells moved. `save` tidies as `checklevel` does (first of
 each character kept, Stinky at (1, 1) if there are none) and returns the file;
 the caller supplies a new map id. `playable` gives the same tidied level for
-test play and leaves the edit alone. `tests/real_levels.rs` runs random edits on
+test play and leaves the edit alone.
+`canvas` turns pointer gestures into edits with no Bevy types: strokes with no
+gaps, dragging a piece or the selection, selecting, copy and paste. A piece put
+on or past the outer wall grows the level, and `take_shift` reports how far the
+cells moved so that the screen can keep the picture still. `tests/real_levels.rs` runs random edits on
 every shipped RTWP level, walks undo and redo back and forth, and starts what
 it saves.
 
@@ -294,11 +298,19 @@ pinned and upgraded deliberately.
   through a `Playlist` in pack order;
   `MenuScenePlugin` runs the menus and draws their background. The level
   plugins run only in `Phase::Game`.
-- **Editor:** `--edit` starts in `Phase::Editor`, on `--level`'s level or a
-  new one, held in the `Editing` resource. There is no canvas yet. Test play
-  starts a copy of the level from memory, tidied as saving tidies it, so
-  nothing is written; while `Editing` exists a win or leaving through the
-  in-game menu returns to the editor and no score is kept.
+- **Editor:** the main menu or `--edit` starts `Phase::Editor`, on a new
+  level or `--level`'s, held in the `Editing` resource. `editor_scene` shows it
+  through a paused `Sim` of the tidied level, at full light, so the game's own
+  code draws it; a change starts a new `Sim` and rebuilds only the surfaces, at
+  most once a frame, as objects follow the `Sim`. The camera is orthographic,
+  straight down, so a ray to the ground finds the cell on any height; one key
+  tilts to the play camera. `editor_ui` draws the panels in `bevy_egui` and
+  projects the grid, the selection and sprite markers for pieces unseen from
+  above onto the canvas; it changes nothing itself, but asks through
+  `Studio::request`, as the keys do. Saves go to `CustomLevels/<NAME>.LV6`.
+  Test play starts a tidied copy from memory, from the level's start or the
+  pointer, so nothing is written; while `Editing` exists a win or leaving
+  through the in-game menu returns to the editor and no score is kept.
 - **Menus:** `menu` is the menus' state and logic with no Bevy types
   (`StartMenu`, `EndMenu`, each `MenuLoopN` as one frame, the text by
   tag, `MenuBkgUpdate`), so it is unit tested; it returns `Action`s

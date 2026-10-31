@@ -36,6 +36,7 @@ use wonderland_logic::{Clock, Session};
 use crate::audio::MenuSounds;
 use crate::camera::{FAR, GameCamera, fov, view_aspect};
 use crate::coords::{rotation, triangle, vec};
+use crate::editor_scene::Editing;
 use crate::flow::{Phase, Playlist, begin, record};
 use crate::hud::{Screen, ScreenFilled, ScreenImage, camera_rect};
 use crate::level::GameData;
@@ -353,6 +354,11 @@ fn menu_frame(
     for a in actions {
         match a {
             Action::Sound(s) => sounds.0.push(s),
+            Action::OpenEditor => {
+                music.0 = Some(None);
+                commands.insert_resource(Editing::default());
+                next.set(Phase::Editor);
+            }
             Action::TitleMusic => music.0 = Some(Some(crate::music::TITLE)),
             Action::LevelMusic(world) => music.0 = Some(Some(world_track(world))),
             Action::EndingMusic => music.0 = Some(Some(crate::music::ENDING)),

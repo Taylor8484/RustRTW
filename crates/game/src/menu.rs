@@ -135,6 +135,8 @@ pub enum Action {
     Quit {
         url: Option<&'static str>,
     },
+    /// Open the level editor on a new level.
+    OpenEditor,
     /// `PlayMusic("res7.dat")`.
     TitleMusic,
     /// `PlayMusic("res4.dat")`, for the classic ending.
@@ -968,6 +970,7 @@ impl Menu {
                 [
                     "SPIEL STARTEN",
                     "OPTIONEN",
+                    "LEVEL EDITOR",
                     "ONLINE HILFE",
                     "ONLINE FORUM",
                     "SPIEL BEENDEN",
@@ -978,6 +981,7 @@ impl Menu {
                 [
                     "JOUER",
                     "OPTIONS",
+                    "EDITEUR DE NIVEAUX",
                     "SOLUCES EN LIGNE",
                     "FORUM EN LIGNE",
                     "SORTIE",
@@ -988,6 +992,7 @@ impl Menu {
                 [
                     "START GAME",
                     "OPTIONS",
+                    "LEVEL EDITOR",
                     "ONLINE SOLUTIONS",
                     "LEVEL EXCHANGE",
                     "EXIT",
@@ -1009,7 +1014,7 @@ impl Menu {
 
         self.run_ticks(ticks, false);
 
-        match self.navigate(keys, 5) {
+        match self.navigate(keys, 6) {
             Some(Press::Enter) => match self.option {
                 0 => {
                     self.end();
@@ -1019,9 +1024,13 @@ impl Menu {
                     self.end();
                     self.start(OPTIONS);
                 }
-                2 | 3 => {
+                2 => {
                     self.end();
-                    self.version_no1 = if self.option == 2 { -999 } else { -998 };
+                    self.actions.push(Action::OpenEditor);
+                }
+                3 | 4 => {
+                    self.end();
+                    self.version_no1 = if self.option == 3 { -999 } else { -998 };
                     self.start(ONLINE);
                 }
                 _ => {
@@ -2817,7 +2826,7 @@ mod tests {
         m.start(MAIN);
         assert!(m.frame(KEYS, 0, &mut o).contains(&Action::Entered(MAIN)));
         let a = press(&mut m, &mut o, MenuKeys { up: true, ..KEYS });
-        assert_eq!(m.option, 4);
+        assert_eq!(m.option, 5);
         assert_eq!(a, vec![Action::Sound(MenuSound::Move)]);
         // Held down for several frames still moves once.
         for _ in 0..5 {
@@ -2866,11 +2875,23 @@ mod tests {
     }
 
     #[test]
+    fn the_main_menu_opens_the_editor() {
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        let mut m = Menu::new();
+        m.start(MAIN);
+        m.frame(KEYS, 0, &mut o);
+        for _ in 0..2 {
+            press(&mut m, &mut o, DOWN);
+        }
+        assert!(press(&mut m, &mut o, ENTER).contains(&Action::OpenEditor));
+    }
+
+    #[test]
     fn going_online_needs_a_yes() {
         let mut o = ConfigOptions::defaults(Game::Rtwp);
         let mut m = Menu::new();
         m.start(MAIN);
-        for _ in 0..2 {
+        for _ in 0..3 {
             press(&mut m, &mut o, DOWN);
         }
         press(&mut m, &mut o, ENTER);
@@ -2880,6 +2901,7 @@ mod tests {
         assert_eq!((m.current, m.version_no1), (MAIN, 1));
         m.frame(KEYS, 1, &mut o);
         assert!(text(&m).starts_with("v1.00"));
+        press(&mut m, &mut o, DOWN);
         press(&mut m, &mut o, DOWN);
         press(&mut m, &mut o, DOWN);
         press(&mut m, &mut o, DOWN);

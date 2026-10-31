@@ -24,7 +24,8 @@
 //!   and the signs, or the menu text.
 //! - [`flow::FlowPlugin`]: the [`flow::Phase`] (menus, play or editor),
 //!   restarts a lost level, moves on from a won one.
-//! - [`editor_scene::EditorPlugin`]: the level editor, and test play.
+//! - [`editor_scene::EditorPlugin`]: the level editor's canvas, and test play;
+//!   [`editor_ui::EditorUiPlugin`]: its panels.
 //! - [`menu_scene::MenuScenePlugin`]: runs [`menu`] and draws its 3D
 //!   background.
 //! - [`ending_scene::EndingScenePlugin`]: draws the endings.
@@ -36,6 +37,7 @@ pub mod audio;
 pub mod camera;
 pub mod coords;
 pub mod editor_scene;
+pub mod editor_ui;
 pub mod ending;
 pub mod ending_scene;
 pub mod flow;
@@ -65,6 +67,7 @@ pub struct GamePlugins;
 
 impl Plugin for GamePlugins {
     fn build(&self, app: &mut App) {
+        app.add_plugins(bevy_egui::EguiPlugin::default());
         app.add_plugins((
             pad::PadPlugin,
             sim::SimPlugin,
@@ -77,6 +80,7 @@ impl Plugin for GamePlugins {
             hud::HudPlugin,
             flow::FlowPlugin,
             editor_scene::EditorPlugin,
+            editor_ui::EditorUiPlugin,
             menu_scene::MenuScenePlugin,
             ending_scene::EndingScenePlugin,
             shot::ShotPlugin,

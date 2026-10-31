@@ -7,6 +7,10 @@
 //! the new level follow `RTWP/editor.bb` (`ClearLevel`, the map size arrows)
 //! and saving does what `SaveLevel` and `checklevel` do, so the files still
 //! load in the original game and editor.
+//!
+//! [`canvas`] turns pointer gestures into these edits.
+
+pub mod canvas;
 
 use std::mem;
 
@@ -18,11 +22,22 @@ use wonderland_formats::catalogue::{self, Group, Layer};
 pub const MIN_SIZE: usize = 14;
 pub const MAX_SIZE: usize = 99;
 
-const FLOOR: i32 = 100;
+/// The longest level file name `SaveLevel`'s prompt takes.
+pub const MAX_NAME: usize = 15;
+
+pub(crate) const FLOOR: i32 = 100;
 const WALL: i32 = 200;
 /// `ClearLevel` leaves `MusicTrack` alone, and it starts at 1.
 const MUSIC_TRACK: i32 = 1;
 const STINKY: i32 = 1;
+
+/// The name to save `name` under, as the original's prompt takes it: upper
+/// case letters and digits, up to [`MAX_NAME`]. `None` if it is no such name.
+pub fn level_name(name: &str) -> Option<String> {
+    let name = name.trim().to_ascii_uppercase();
+    let fits = (1..=MAX_NAME).contains(&name.len());
+    (fits && name.bytes().all(|b| b.is_ascii_alphanumeric())).then_some(name)
+}
 
 /// An edge of the level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +165,8 @@ pub struct Editor {
     redo: Vec<Step>,
     /// The level as last saved or opened.
     saved: Level,
+    /// Counts changes to the level, for a screen that follows it.
+    revision: u64,
 }
 
 impl Default for Editor {
@@ -199,11 +216,17 @@ impl Editor {
             before: None,
             undo: vec![],
             redo: vec![],
+            revision: 0,
         }
     }
 
     pub fn level(&self) -> &Level {
         &self.level
+    }
+
+    /// Changes whenever the level may have.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Whether the level differs from the one last saved or opened.
@@ -216,6 +239,7 @@ impl Editor {
         if self.before.is_none() {
             self.before = Some(Box::new(self.level.clone()));
         }
+        self.revision += 1;
         &mut self.level
     }
 
@@ -235,6 +259,7 @@ impl Editor {
     pub fn cancel(&mut self) {
         if let Some(before) = self.before.take() {
             self.level = *before;
+            self.revision += 1;
         }
     }
 
@@ -246,6 +271,7 @@ impl Editor {
             return false;
         };
         step.swap(&mut self.level);
+        self.revision += 1;
         self.redo.push(step);
         true
     }
@@ -258,6 +284,7 @@ impl Editor {
             return false;
         };
         step.swap(&mut self.level);
+        self.revision += 1;
         self.undo.push(step);
         true
     }
@@ -297,6 +324,16 @@ impl Editor {
         match self.top(x, y).0 {
             Layer::Object => self.place(x, y, Layer::Object, 0),
             Layer::Tile => self.place(x, y, Layer::Tile, FLOOR),
+        }
+    }
+
+    /// Turns a block to bare floor.
+    pub fn clear(&mut self, x: usize, y: usize, width: usize, height: usize) {
+        for y in y..y + height {
+            for x in x..x + width {
+                self.place(x, y, Layer::Tile, FLOOR);
+                self.place(x, y, Layer::Object, 0);
+            }
         }
     }
 
@@ -443,6 +480,31 @@ impl Editor {
         let mut copy = Self::open(self.level.clone());
         copy.tidy();
         copy.level
+    }
+
+    /// [`Editor::playable`] with the first character found moved to (`x`,
+    /// `y`), to test a level from there.
+    pub fn playable_from(&self, x: usize, y: usize) -> Level {
+        let mut copy = Self::open(self.playable());
+        let first = copy.level.objects.iter().copied().find(|&code| {
+            catalogue::find(Layer::Object, code).is_some_and(|p| p.group == Group::Character)
+        });
+        if let Some(code) = first {
+            copy.place(x, y, Layer::Object, code);
+        }
+        copy.level
+    }
+
+    /// Whether the level has a character of its own, before tidying.
+    pub fn has_character(&self) -> bool {
+        self.level.objects.iter().any(|&code| {
+            catalogue::find(Layer::Object, code).is_some_and(|p| p.group == Group::Character)
+        })
+    }
+
+    /// Sets the title the custom level menu shows.
+    pub fn set_title(&mut self, title: &str) {
+        self.editing().description = title.to_owned();
     }
 
     /// Keeps the first of each character, and puts Stinky at (1, 1) if there
@@ -707,6 +769,37 @@ mod tests {
         assert!(editor.undo());
         assert_eq!(editor.level().object(3, 3), 0);
         assert!(!editor.undo());
+    }
+
+    #[test]
+    fn playable_from_moves_the_first_character() {
+        let mut editor = Editor::new();
+        editor.place(2, 2, Layer::Object, 2);
+        let level = editor.playable_from(5, 6);
+        assert_eq!(level.object(5, 6), 2);
+        assert_eq!(level.object(2, 2), 0);
+        assert_eq!(editor.level().object(2, 2), 2);
+        assert_eq!(Editor::new().playable_from(5, 6).object(5, 6), STINKY);
+    }
+
+    #[test]
+    fn names_follow_the_prompt() {
+        assert_eq!(level_name(" my1 ").as_deref(), Some("MY1"));
+        assert_eq!(level_name(""), None);
+        assert_eq!(level_name("A/B"), None);
+        assert_eq!(level_name("TWO WORDS"), None);
+        assert_eq!(level_name(&"A".repeat(16)), None);
+    }
+
+    #[test]
+    fn revision_follows_every_change() {
+        let mut editor = Editor::new();
+        let start = editor.revision();
+        editor.place(1, 1, Layer::Tile, 300);
+        let placed = editor.revision();
+        assert_ne!(placed, start);
+        editor.undo();
+        assert_ne!(editor.revision(), placed);
     }
 
     #[test]

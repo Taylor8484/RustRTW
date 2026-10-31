@@ -60,6 +60,11 @@ pub enum Phase {
     Editor,
 }
 
+/// Whether a level is on show, with the [`Sim`] that draws it.
+pub fn level_shown(phase: Res<State<Phase>>, sim: Option<Res<Sim>>) -> bool {
+    *phase.get() != Phase::Menu && sim.is_some()
+}
+
 /// `--level`'s levels to play in order, and which is being played.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct Playlist {
@@ -112,6 +117,7 @@ impl Plugin for FlowPlugin {
         }
         app.add_systems(OnEnter(Phase::Game), spawn_level)
             .add_systems(OnExit(Phase::Game), despawn_level)
+            .add_systems(OnExit(Phase::Editor), despawn_level)
             .add_systems(
                 Update,
                 (record_wins, finish_level, game_menu)

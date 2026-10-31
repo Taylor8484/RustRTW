@@ -31,7 +31,7 @@ use wonderland_logic::world::Lights;
 use wonderland_logic::{Spawn, World};
 
 use crate::coords::{triangle, vec};
-use crate::flow::Phase;
+use crate::flow::level_shown;
 use crate::level::{GameData, LevelData};
 use crate::lighting::light_direction;
 use crate::model::{Geometry, Model, ModelId, blitz_quat, custom_pillar, load, player_skins};
@@ -674,10 +674,7 @@ impl Plugin for ObjectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Pools>()
             .add_systems(Startup, load_models)
-            .add_systems(
-                Update,
-                sync_objects.after(SimStep).run_if(in_state(Phase::Game)),
-            );
+            .add_systems(Update, sync_objects.after(SimStep).run_if(level_shown));
     }
 }
 

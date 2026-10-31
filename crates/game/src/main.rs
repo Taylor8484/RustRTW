@@ -8,7 +8,8 @@
 //! screen setting from `options.cfg` as the original does; `--windowed`
 //! keeps it in a window. Wide screens show more at the sides;
 //! `--pillarbox` keeps the original's 4:3 picture with black bars. `--edit`
-//! starts in the level editor, on `--level`'s level or a new one.
+//! starts in the level editor, on `--level`'s level or a new one; the main
+//! menu opens it too.
 
 // No console window behind the game. `fail` covers what it would have shown.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]

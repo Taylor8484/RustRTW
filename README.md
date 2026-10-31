@@ -31,8 +31,9 @@ Original Wonderland run under Return to Wonderland's rules, with TOW's own
 behaviour kept where it changes how a level plays. See
 [docs/diff-tow.md](docs/diff-tow.md).
 
-A new level editor is being developed. Until it is ready, levels can be made
-with the original editor.
+A new level editor is being developed: choose Level Editor on the main menu to
+try it. It saves to `CustomLevels` in the format the original game reads, and
+the original editor can still make everything it cannot yet.
 
 ## Playing
 
@@ -129,7 +130,7 @@ To work on the original Blitz3D code, see
 
 - Runs natively on modern Windows and Linux, with no Blitz3D or dgVoodoo.
 - Wide screens show more of the level at the sides.
-- The original's level editor is not included yet.
+- The new level editor has no sign text, level settings or link drawing yet.
 - The online menu entries still point to the original game's web pages.
 
 ## Licence and credits

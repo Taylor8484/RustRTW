@@ -12,8 +12,8 @@ name = "wonderland"
 path = "src/main.rs"
 
 [dependencies]
-# Only what the games use: 3D meshes, a window, the keyboard, controllers, UI text for
-# the HUD and WAV sound. Building `bevy_audio` on Linux needs the ALSA
+# Only what the games use: 3D meshes, a window, the keyboard, the mouse (the
+# editor), controllers, UI text for the HUD and WAV sound. Building `bevy_audio` on Linux needs the ALSA
 # headers (`libasound2-dev`). Textures
 # (BMP/JPEG) are decoded with `image` here, so Bevy's image formats stay
 # off. The camera turns tonemapping off, so its lookup tables are not
@@ -29,6 +29,7 @@ bevy = { version = "=0.20.0", default-features = false, features = [
     "x11",
     "wayland",
     "keyboard",
+    "mouse",
     "gamepad",
     "bevy_gilrs",
     "bevy_window",
@@ -47,6 +48,8 @@ bevy = { version = "=0.20.0", default-features = false, features = [
     "bevy_audio",
     "wav",
 ] }
+# The editor's panels.
+bevy_egui = { version = "=0.43.1", default-features = false, features = ["render", "default_fonts"] }
 # PNG only for `WL_SCREENSHOT`.
 image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png"] }
 # Impulse Tracker music (`res3.dat` to `res8.dat`), mixed in Rust.

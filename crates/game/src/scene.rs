@@ -13,7 +13,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use crate::coords::{triangle, vec};
-use crate::flow::Phase;
+use crate::flow::level_shown;
 use crate::level::{GameData, LevelData};
 use crate::level_mesh::{Quad, Tex, construct_background, construct_level};
 use crate::lighting;
@@ -104,7 +104,7 @@ impl Plugin for ScenePlugin {
                 Update,
                 (update_lit_faces, animate_uvs, drift_planes)
                     .after(SimStep)
-                    .run_if(in_state(Phase::Game)),
+                    .run_if(level_shown),
             );
     }
 }
