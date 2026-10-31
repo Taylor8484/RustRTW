@@ -14,8 +14,8 @@
 //!
 //! `WL_MENU=<ticks>[,<menu>]` starts with `MenuTimer` already at `ticks`
 //! (and in menu `menu`), for checking the later parts of the sunrise or
-//! another menu in a screenshot; `WL_PLAYER=<name>` loads that player
-//! first.
+//! another menu in a screenshot, and a third number starts an ending
+//! that many ticks in (menu 40 is TOW's ending); `WL_PLAYER=<name>` loads that player first.
 
 use bevy::app::AppExit;
 use bevy::asset::RenderAssetUsages;
@@ -28,7 +28,7 @@ use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use wonderland_campaign::custom::{self, CustomLevels};
 use wonderland_campaign::profile::Players;
-use wonderland_campaign::worlds::{LEVELS, Worlds};
+use wonderland_campaign::worlds::{Content, LEVELS, PLAYGROUND_LEVEL, Worlds};
 use wonderland_formats::level::Level;
 use wonderland_logic::world::Lights;
 use wonderland_logic::{Clock, Session};
@@ -40,7 +40,7 @@ use crate::flow::{Phase, Playlist, begin, record};
 use crate::hud::{Screen, ScreenFilled, ScreenImage, camera_rect};
 use crate::level::GameData;
 use crate::lighting::factor;
-use crate::menu::{Action, LevelCursor, Menu, MenuKeys, Selector, Square, exit_sound};
+use crate::menu::{Action, LevelCursor, MAIN, Menu, MenuKeys, Selector, Square, exit_sound};
 use crate::model::{Geometry, cylinder_segments, flip, sphere_segments};
 use crate::music::{MusicRequest, extra_track, world_track};
 use crate::objects::vertex_colour;
@@ -48,6 +48,10 @@ use crate::particles::frame;
 use crate::scene::TextureCache;
 use crate::sim::Sim;
 use crate::style::TextureRef;
+use crate::tow_ending::{self, TowEnding};
+
+/// `ScaleSprite` of the sparkles, which the mesh is built at.
+const SPARKLE_SCALE: f32 = 0.6;
 
 /// `CameraFogRange`.
 pub const FOG_RANGE: (f32, f32) = (90.0, 128.0);
@@ -63,7 +67,7 @@ pub struct MenuState {
 
 /// Part of the menu background.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-enum Part {
+pub(crate) enum Part {
     Sky,
     /// The lower (0) and upper (1) water plane.
     Water(usize),
@@ -128,6 +132,8 @@ fn setup_menu(mut commands: Commands, data: Res<GameData>, time: Res<Time<Real>>
     // `WL_MENU=<timer>[,<menu>]`, for screenshots.
     let spec = std::env::var("WL_MENU").unwrap_or_default();
     let mut spec = spec.split(',').map(|v| v.trim().parse::<i32>().ok());
+    let mut tow_skip = 0;
+    let tow_ending = |m: Option<Option<i32>>| m == Some(Some(40));
     if let Some(Some(t)) = spec.next() {
         // As if the title had been running that long.
         for timer in (-500..t).map(|t| t + 1) {
@@ -135,9 +141,21 @@ fn setup_menu(mut commands: Commands, data: Res<GameData>, time: Res<Time<Real>>
             menu.background.tick(timer, menu.current);
         }
     }
-    if let Some(Some(m)) = spec.next() {
+    let shown = spec.next();
+    if let Some(Some(m)) = shown {
         menu.end();
-        menu.start(m);
+        menu.start(if tow_ending(shown) { MAIN } else { m });
+    }
+    // A third number: that many ticks into the ending.
+    if let Some(Some(t)) = spec.next() {
+        if let Some(e) = &mut menu.ending {
+            menu.level_timer = t;
+            (0..=t).for_each(|t| e.tick(t));
+        }
+        tow_skip = t as u32;
+    }
+    if tow_ending(shown) {
+        menu.start_tow_ending(tow_skip);
     }
     commands.insert_resource(MenuState {
         menu,
@@ -166,7 +184,7 @@ fn level_titles(data: &GameData, worlds: &Worlds) -> Vec<String> {
 }
 
 /// The menu keys held now.
-fn read_keys(keys: &ButtonInput<KeyCode>) -> MenuKeys {
+pub(crate) fn read_keys(keys: &ButtonInput<KeyCode>) -> MenuKeys {
     let any = |k: &[KeyCode]| k.iter().any(|&k| keys.pressed(k));
     MenuKeys {
         up: any(&[KeyCode::ArrowUp, KeyCode::Numpad8]),
@@ -177,6 +195,8 @@ fn read_keys(keys: &ButtonInput<KeyCode>) -> MenuKeys {
         escape: keys.pressed(KeyCode::Escape),
         space: keys.pressed(KeyCode::Space),
         one: keys.pressed(KeyCode::Digit1),
+        two: keys.pressed(KeyCode::Digit2),
+        three: keys.pressed(KeyCode::Digit3),
         zero: keys.pressed(KeyCode::Digit0),
         delete: keys.pressed(KeyCode::Delete),
         backspace: keys.pressed(KeyCode::Backspace),
@@ -316,6 +336,7 @@ fn menu_frame(
             Action::Sound(s) => sounds.0.push(s),
             Action::TitleMusic => music.0 = Some(Some(crate::music::TITLE)),
             Action::LevelMusic(world) => music.0 = Some(Some(world_track(world))),
+            Action::EndingMusic => music.0 = Some(Some(crate::music::ENDING)),
             Action::StopMusic => music.0 = Some(None),
             // `TweenTime=MilliSecs()-TweenPeriod`.
             Action::Entered(_) => st.clock = Clock::new(&data.ruleset, now),
@@ -360,6 +381,29 @@ fn menu_frame(
                             st.menu.selector_menu()
                         };
                         st.menu.start(back);
+                    }
+                }
+            }
+            Action::TowEnding { skip } => {
+                let session = Session::default();
+                let path = st.menu.worlds.level_path(PLAYGROUND_LEVEL + 10);
+                let started = path
+                    .ok_or_else(|| "no ending stage".to_owned())
+                    .and_then(|p| begin(&data, Content::Tow, &p, session, now, None));
+                match started {
+                    Ok((level, mut sim)) => {
+                        let mut ending = TowEnding::new(&mut sim.world, st.menu.language);
+                        (0..skip).for_each(|_| ending.tick(&mut sim.world));
+                        sim.ending = Some(ending);
+                        music.0 = Some(Some(crate::music::TITLE));
+                        commands.insert_resource(level);
+                        commands.insert_resource(sim);
+                        commands.remove_resource::<Playlist>();
+                        next.set(Phase::Game);
+                    }
+                    Err(e) => {
+                        error!("{e}");
+                        st.menu.start(MAIN);
                     }
                 }
             }
@@ -415,10 +459,20 @@ fn open_url(url: &str) {
 
 /// `StartMenu`'s camera: at the origin looking along +z, `CameraZoom 2`,
 /// `CameraRange .98, 140`.
-fn menu_camera(mut camera: Query<(&Camera, &mut Transform, &mut Projection), With<GameCamera>>) {
+///
+/// The deluxe ending moves it back and up, looking down a little.
+fn menu_camera(
+    state: Res<MenuState>,
+    mut camera: Query<(&Camera, &mut Transform, &mut Projection), With<GameCamera>>,
+) {
+    let deluxe = state.menu.ending.as_ref().is_some_and(|e| e.deluxe);
     for (cam, mut t, mut p) in &mut camera {
         let aspect = view_aspect(cam);
-        *t = Transform::IDENTITY;
+        *t = if deluxe {
+            Transform::from_translation(vec([0.0, 3.0, -10.0])).with_rotation(rotation(10.0, 0.0))
+        } else {
+            Transform::IDENTITY
+        };
         if let Projection::Perspective(p) = &mut *p {
             p.fov = fov(2.0, aspect);
             p.near = 0.98;
@@ -431,31 +485,49 @@ fn menu_camera(mut camera: Query<(&Camera, &mut Transform, &mut Projection), Wit
 fn fog_colour(
     mut commands: Commands,
     state: Option<Res<MenuState>>,
+    sim: Option<Res<Sim>>,
+    phase: Res<State<Phase>>,
+    mut clear: ResMut<ClearColor>,
     mut cameras: Query<(Entity, Option<&mut DistanceFog>), With<GameCamera>>,
 ) {
     let Some(state) = state else {
         return;
     };
-    let [r, g, b] = state
-        .menu
-        .background
-        .fog
-        .map(|c| c.clamp(0, 255) as f32 / 255.0);
+    // TOW's ending has a sky of its own, until the fade.
+    let ending = sim
+        .as_ref()
+        .filter(|_| *phase.get() == Phase::Game)
+        .and_then(|s| s.ending.as_ref());
+    let (fog, range) = match ending {
+        Some(e) => (e.sky, tow_ending::FOG_RANGE),
+        None => (state.menu.background.fog, FOG_RANGE),
+    };
+    let [r, g, b] = fog.map(|c| c.clamp(0, 255) as f32 / 255.0);
     let color = Color::srgb(r, g, b);
+    let falloff = FogFalloff::Linear {
+        start: range.0,
+        end: range.1,
+    };
+    let backdrop = if ending.is_some() {
+        color
+    } else {
+        Color::BLACK
+    };
+    if clear.0 != backdrop {
+        clear.0 = backdrop;
+    }
     for (e, fog) in &mut cameras {
         match fog {
             Some(mut f) => {
                 if f.color != color {
                     f.color = color;
                 }
+                f.falloff = falloff.clone();
             }
             None => {
                 commands.entity(e).insert(DistanceFog {
                     color,
-                    falloff: FogFalloff::Linear {
-                        start: FOG_RANGE.0,
-                        end: FOG_RANGE.1,
-                    },
+                    falloff: falloff.clone(),
                     ..default()
                 });
             }
@@ -464,7 +536,7 @@ fn fog_colour(
 }
 
 /// A Bevy mesh from Blitz geometry, coloured white.
-fn mesh_of(g: &Geometry) -> Mesh {
+pub(crate) fn mesh_of(g: &Geometry) -> Mesh {
     let positions: Vec<[f32; 3]> = g.positions.iter().map(|p| vec(*p).to_array()).collect();
     let normals: Vec<[f32; 3]> = g.normals.iter().map(|n| vec(*n).to_array()).collect();
     let indices: Vec<u32> = g.triangles.iter().flat_map(|&t| triangle(t)).collect();
@@ -670,7 +742,7 @@ fn show_background<const SHOW: bool>(mut parts: Query<&mut Visibility, With<Part
 
 /// `ScaleTexture` then `PositionTexture`, in the convention of
 /// [`crate::scene::uv_transform`].
-fn uv_transform(scale: f32, position: [f32; 2]) -> Affine2 {
+pub(crate) fn uv_transform(scale: f32, position: [f32; 2]) -> Affine2 {
     Affine2::from_translation(-Vec2::from(position)) * Affine2::from_scale(Vec2::splat(1.0 / scale))
 }
 
@@ -725,10 +797,16 @@ fn pose_background(
             }
             Part::Sparkle(i) => {
                 let (at, roll) = bg.sparkles[i];
-                // Sprites face the camera, which looks straight ahead.
+                let (at, roll, scale) = match &state.menu.ending {
+                    Some(e) => e.stars[i],
+                    None => (at, roll, SPARKLE_SCALE),
+                };
+                // Sprites face the camera, which looks straight ahead (or
+                // nearly, in the deluxe ending).
                 (
                     Transform::from_translation(vec(at))
-                        .with_rotation(Quat::from_rotation_z(roll.to_radians())),
+                        .with_rotation(Quat::from_rotation_z(roll.to_radians()))
+                        .with_scale(Vec3::splat(scale / SPARKLE_SCALE)),
                     None,
                 )
             }

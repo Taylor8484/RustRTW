@@ -93,8 +93,16 @@ impl World {
         }
     }
 
+    /// `StartMenu(5)`: the signs go while the in-game menu is open. The
+    /// lights it sets last only until the next tick, so they are the
+    /// front end's.
+    pub fn stop_signs_for_menu(&mut self) {
+        self.stop_sign(LEVEL_COMPLETE);
+        self.stop_level_signs();
+    }
+
     /// `CheckSigns`.
-    pub(crate) fn check_signs(&mut self) {
+    pub fn check_signs(&mut self) {
         for k in 1..self.players.len() {
             self.start_signs_under(k);
         }

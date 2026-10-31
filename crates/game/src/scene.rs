@@ -344,9 +344,9 @@ fn update_lit_faces(
     faces: Query<(&LitFace, &MeshMaterial3d<StandardMaterial>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let lights = &sim.world.lights;
+    let lights = sim.lights();
     for (face, handle) in &faces {
-        let [r, g, b] = lighting::factor(lights, face.normal);
+        let [r, g, b] = lighting::factor(&lights, face.normal);
         let colour = Color::srgba(r, g, b, face.alpha);
         if let Some(mut m) = materials.get_mut(&handle.0)
             && m.base_color != colour

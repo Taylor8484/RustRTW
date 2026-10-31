@@ -21,6 +21,7 @@ use crate::sim::{Sim, SimStep};
 
 /// `CameraRange`'s far plane.
 pub const FAR: f32 = 140.0;
+const ENDING_FAR: f32 = crate::tow_ending::FAR;
 
 #[derive(Component)]
 pub struct GameCamera;
@@ -125,7 +126,11 @@ fn follow_world(
         if let Projection::Perspective(p) = &mut *p {
             p.fov = fov(c.zoom, aspect);
             p.near = c.near;
-            p.far = FAR;
+            p.far = if sim.ending.is_some() {
+                ENDING_FAR
+            } else {
+                FAR
+            };
         }
     }
 }

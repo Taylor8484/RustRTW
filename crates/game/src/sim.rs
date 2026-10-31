@@ -3,10 +3,13 @@
 //! steps the world that many times.
 
 use bevy::prelude::*;
+use wonderland_logic::world::Lights;
 use wonderland_logic::{Clock, Completion, Event, Input, Session, World};
 
 use crate::flow::Phase;
+use crate::game_menu::GameMenu;
 use crate::level::{GameData, LevelData};
+use crate::tow_ending::TowEnding;
 
 /// The level in play.
 #[derive(Resource)]
@@ -21,6 +24,10 @@ pub struct Sim {
     pub tween: f32,
     /// The events of every tick run this frame, in order.
     pub events: Vec<Event>,
+    /// The in-game menu, while the level stands still behind it.
+    pub menu: Option<GameMenu>,
+    /// TOW's ending, when that is what the level is playing.
+    pub ending: Option<TowEnding>,
 }
 
 impl Sim {
@@ -40,7 +47,20 @@ impl Sim {
             ticks: 0,
             tween: 0.0,
             events,
+            menu: None,
+            ending: None,
         })
+    }
+
+    /// The lights to draw by: `StartMenu(5)` dims the level until the next
+    /// tick sets them back.
+    pub fn lights(&self) -> Lights {
+        let mut lights = self.world.lights;
+        if self.menu.is_some() {
+            lights.light = [0; 3];
+            lights.ambient = [100; 3];
+        }
+        lights
     }
 }
 
@@ -117,13 +137,18 @@ fn step(
     let frame = sim.clock.advance(now_ms(&time));
     let input = read_input(&keys);
     sim.events.clear();
-    sim.ticks = frame.ticks;
+    // `MenuLoop5` keeps the clock going but runs no ticks.
+    sim.ticks = if sim.menu.is_some() { 0 } else { frame.ticks };
     sim.tween = frame.tween;
-    for _ in 0..frame.ticks {
+    for _ in 0..sim.ticks {
         if matches!(sim.world.completion, Completion::Done | Completion::Restart) {
             break;
         }
-        sim.world.step(input);
+        let sim = &mut *sim;
+        match &mut sim.ending {
+            Some(ending) => ending.tick(&mut sim.world),
+            None => sim.world.step(input),
+        }
         let events = sim.world.events().to_vec();
         sim.events.extend(events);
         anim.tick(sim.world.conveyor_active, data.ruleset.base_speed);

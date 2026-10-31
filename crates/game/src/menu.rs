@@ -5,13 +5,13 @@
 //! draws it and carries out the [`Action`]s. Ported so far: the title (0),
 //! the main menu (1), player select (2), new player (3), the level
 //! selector (4), "Confirm Player Deletion?" (6), options (9), "Exit to
-//! Windows?" (10), the level packs (13), the custom levels (14) and "Go
-//! Online?" (15).
+//! Windows?" (10), the endings (12 and 16), the level packs (13), the
+//! custom levels (14) and "Go Online?" (15). The in-game menu (5) is
+//! [`crate::game_menu`].
 //!
 //! The level pack menu offers the tutorial, classic, deluxe and custom
 //! levels; the kids levels' line is commented out in the original, so
-//! their worlds are never reached. The endings (12 and 16, step 4f) go
-//! to the main menu until they are ported.
+//! their worlds are never reached.
 //!
 //! Each `MenuLoopN` is one frame: it lays out the text (the letters get
 //! their alpha when first shown), runs the frame's ticks of
@@ -29,6 +29,7 @@ use wonderland_campaign::worlds::{
 };
 use wonderland_formats::config::Options as ConfigOptions;
 
+use crate::ending::EndScene;
 use crate::hud::{Edge, Letter, display_text, pinned};
 
 pub const TITLE: i32 = 0;
@@ -41,9 +42,13 @@ pub const DELETE_PLAYER: i32 = 6;
 pub const PLAYGROUND: i32 = 8;
 pub const OPTIONS: i32 = 9;
 pub const EXIT: i32 = 10;
+/// The end of the classic levels.
+pub const ENDING: i32 = 12;
 pub const LEVEL_PACKS: i32 = 13;
 pub const CUSTOM_LEVELS: i32 = 14;
 pub const ONLINE: i32 = 15;
+/// The end of the deluxe levels.
+pub const ENDING_DELUXE: i32 = 16;
 
 /// The keys the menus read, held this frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -56,6 +61,9 @@ pub struct MenuKeys {
     /// selector).
     pub left: bool,
     pub right: bool,
+    /// The 2 and 3 of the top row, with `one` the way to the ending.
+    pub two: bool,
+    pub three: bool,
     /// Return or keypad Enter.
     pub enter: bool,
     pub escape: bool,
@@ -128,8 +136,14 @@ pub enum Action {
     },
     /// `PlayMusic("res7.dat")`.
     TitleMusic,
+    /// `PlayMusic("res4.dat")`, for the classic ending.
+    EndingMusic,
     /// `StopChannel Music`.
     StopMusic,
+    /// TOW's `StartMenu(12)`, `skip` ticks in.
+    TowEnding {
+        skip: u32,
+    },
 }
 
 /// The pages the original sends `VersionNo1` codes to on exit.
@@ -221,7 +235,7 @@ impl Text {
 
     /// Turns on the letters not shown yet, giving each the alpha `alpha`
     /// returns for it (`None` keeps the one it was made with).
-    fn activate(&mut self, alpha: impl Fn() -> Option<f32>) {
+    pub(crate) fn activate(&mut self, alpha: impl Fn() -> Option<f32>) {
         for l in &mut self.letters {
             if !l.active {
                 l.active = true;
@@ -436,6 +450,8 @@ enum Press {
 /// The menus' state: the globals `menu.bb` keeps between frames.
 #[derive(Debug, Clone)]
 pub struct Menu {
+    /// The ending in progress.
+    pub ending: Option<EndScene>,
     /// `CurrentMenu`.
     pub current: i32,
     /// `CurrentMenuOption`.
@@ -523,6 +539,7 @@ pub struct Menu {
 impl Default for Menu {
     fn default() -> Self {
         Self {
+            ending: None,
             current: TITLE,
             option: 0,
             timer: 0,
@@ -625,6 +642,14 @@ impl Menu {
             self.level_timer = 0;
             self.level = PLAYGROUND_LEVEL;
             self.make_playground_squares();
+        } else if menu == ENDING || menu == ENDING_DELUXE {
+            self.level_timer = 0;
+            self.ending = Some(EndScene::new(menu == ENDING_DELUXE));
+            self.actions.push(if menu == ENDING {
+                Action::EndingMusic
+            } else {
+                Action::TitleMusic
+            });
         } else if menu == LEVEL_PACKS {
             self.level_timer = 0;
             self.actions.push(Action::StopMusic);
@@ -637,6 +662,11 @@ impl Menu {
         self.current = menu;
         self.update_selector();
         self.actions.push(Action::Entered(menu));
+    }
+
+    /// Asks for TOW's ending, `skip` ticks in.
+    pub fn start_tow_ending(&mut self, skip: u32) {
+        self.actions.push(Action::TowEnding { skip });
     }
 
     /// A character typed (what `GetKey` returns), for the name entry.
@@ -704,6 +734,8 @@ impl Menu {
             LEVEL_PACKS => self.level_packs(keys, ticks),
             CUSTOM_LEVELS => self.custom_levels(keys, ticks),
             ONLINE => self.online(keys, ticks),
+            ENDING => self.ending(keys, ticks),
+            ENDING_DELUXE => self.ending_deluxe(keys, ticks),
             // Ported in later steps.
             _ => self.run_ticks(ticks, false),
         }
@@ -963,8 +995,111 @@ impl Menu {
             }
             None => {}
         }
-        // Holding 1, 2 and 3 jumps to the ending (`StartMenu(12)`), which
-        // comes with step 4f.
+        if keys.one && keys.two && keys.three {
+            self.end();
+            self.cursor_key = 1;
+            self.start(ENDING);
+        }
+    }
+
+    /// Esc as the endings read it, back to the main menu.
+    fn leave_ending(&mut self, keys: MenuKeys) {
+        if keys.escape {
+            if self.cursor_key == 0 {
+                self.cursor_key = 1;
+                self.ending = None;
+                self.end();
+                self.start(MAIN);
+            }
+        } else {
+            self.cursor_key = 0;
+        }
+    }
+
+    /// `MenuLoop12`: the thanks and the cast's names, then the farewell.
+    fn ending(&mut self, keys: MenuKeys, ticks: u32) {
+        let t2 = self.level_timer % 7800;
+        let tx = &mut self.text;
+        if t2 < 6000 {
+            tx.center("Congratulations!!!", 2.0, 1.0, 52);
+            tx.center("You have completed", 4.0, 1.0, 53);
+            tx.center("Return To Wonderland", 5.0, 1.0, 50);
+            tx.center("Thank you for playing!", 7.0, 1.0, 51);
+            tx.center("Special Thanks from", 15.0, 1.0, 54);
+            let name = [
+                "Stinky!",
+                "Loof!",
+                "Scouge!",
+                "Coily!",
+                "Kaboom!",
+                "Z-Bot!",
+                "The Flying Saucer!",
+                "Red Chomper!",
+                "Gold Chomper!",
+                "and Ghost!",
+            ][(t2 / 600) as usize];
+            tx.center(name, 16.0, 1.0, 55);
+        } else {
+            tx.center("Well Done!", 6.0, 1.0, 50);
+            tx.center("We hope you enjoyed the Game!", 8.0, 1.0, 51);
+            tx.center("Best Wishes from your Friends at", 10.0, 1.0, 52);
+            tx.center("Midnight Synergy", 11.0, 1.0, 53);
+            tx.center("www.midnightsynergy.com", 13.0, 1.0, 54);
+            tx.center("", 14.0, 1.0, 55);
+        }
+        tx.activate(|| None);
+        for _ in 0..ticks {
+            self.level_timer += 1;
+            if let Some(e) = &mut self.ending {
+                e.tick(self.level_timer);
+            }
+        }
+        self.leave_ending(keys);
+    }
+
+    /// `MenuLoop16`: the story's end, a page every 1000 ticks. The last
+    /// page stays.
+    fn ending_deluxe(&mut self, keys: MenuKeys, ticks: u32) {
+        let page = match self.level_timer / 1000 {
+            0 | 10 => Some(["", "", ""]),
+            1 => Some(["", "And so,", ""]),
+            2 => Some(["", "after a long journey", ""]),
+            3 => Some(["the Rainbow Spirits", "returned to the", "Rainbow World"]),
+            4 => Some(["and balance", "was once again restored", "in Wonderland."]),
+            5 => Some(["", "What happened next?", ""]),
+            6 => Some([
+                "Mayor Peegue returned to",
+                "Wondertown and helped fellow",
+                "Wonderlanders rebuild their city.",
+            ]),
+            7 => Some([
+                "Qookie went back to the cottage,",
+                "made friends with the wild wood chompers,",
+                "and shared some giant mushrooms with them.",
+            ]),
+            8 => Some(["Stinky and Loof", "briefly considered retirement.", ""]),
+            9 => Some([
+                "But another adventure",
+                "was sure to be",
+                "just around the corner.",
+            ]),
+            11 => Some(["THE END", "", "Thank you for playing!"]),
+            _ => None,
+        };
+        if let Some(page) = page {
+            let tx = &mut self.text;
+            tx.center(page[0], 1.0, 1.0, 52);
+            tx.center(page[1], 2.0, 1.0, 53);
+            tx.center(page[2], 3.0, 1.0, 50);
+        }
+        self.text.activate(|| None);
+        for _ in 0..ticks {
+            if let Some(e) = &mut self.ending {
+                e.tick(self.level_timer);
+            }
+            self.level_timer += 1;
+        }
+        self.leave_ending(keys);
     }
 
     /// `MenuLoop2`: CREATE NEW PLAYER, then the players on disk with
@@ -1709,9 +1844,11 @@ impl Menu {
                         self.end();
                         self.level = world * 10;
                         match world {
-                            // The endings (menus 12 and 16, and TOW's
-                            // 12), and the end of the tutorials.
-                            10 | 12 | 28 | 40 => self.start(MAIN),
+                            10 => self.start(ENDING),
+                            28 => self.start(ENDING_DELUXE),
+                            40 => self.actions.push(Action::TowEnding { skip: 0 }),
+                            // The end of the tutorials.
+                            12 => self.start(MAIN),
                             _ => {
                                 self.actions.push(Action::LevelMusic(world));
                                 self.start(LEVEL_SELECT);
@@ -2467,6 +2604,8 @@ mod tests {
         ..KEYS
     };
     const KEYS: MenuKeys = MenuKeys {
+        two: false,
+        three: false,
         up: false,
         down: false,
         left: false,
@@ -2649,6 +2788,53 @@ mod tests {
         // The mountains go round the camera once in 72000 ticks.
         b.tick(72000, TITLE);
         assert!((b.terrain_at[0] + 128.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn holding_one_two_three_starts_the_ending_and_esc_leaves_it() {
+        let mut m = Menu::new();
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        m.end();
+        m.start(MAIN);
+        let held = MenuKeys {
+            one: true,
+            two: true,
+            three: true,
+            ..KEYS
+        };
+        let a = m.frame(held, 0, &mut o);
+        assert_eq!(m.current, ENDING);
+        assert!(a.contains(&Action::EndingMusic));
+        m.frame(KEYS, 700, &mut o);
+        m.frame(KEYS, 0, &mut o);
+        assert!(text(&m).contains("Loof!"));
+        m.level_timer = 6100;
+        m.frame(KEYS, 1, &mut o);
+        assert!(text(&m).contains("Midnight Synergy"));
+        let esc = MenuKeys {
+            escape: true,
+            ..KEYS
+        };
+        m.frame(esc, 0, &mut o);
+        assert_eq!(m.current, MAIN);
+        assert_eq!(m.ending, None);
+    }
+
+    #[test]
+    fn the_deluxe_ending_keeps_its_last_page() {
+        let mut m = Menu::new();
+        let mut o = ConfigOptions::defaults(Game::Rtwp);
+        m.end();
+        m.start(ENDING_DELUXE);
+        assert!(m.actions.contains(&Action::TitleMusic));
+        m.level_timer = 3500;
+        m.frame(KEYS, 1, &mut o);
+        assert!(text(&m).contains("Rainbow Spirits"));
+        m.level_timer = 11500;
+        m.frame(KEYS, 1, &mut o);
+        m.level_timer = 40000;
+        m.frame(KEYS, 1, &mut o);
+        assert!(text(&m).contains("THE END"));
     }
 
     #[test]
@@ -2876,7 +3062,7 @@ mod tests {
         m.start(LEVEL_SELECT);
         m.level = 100;
         press(&mut m, &mut o, ENTER);
-        assert_eq!((m.current, m.world()), (MAIN, 10));
+        assert_eq!((m.current, m.world()), (ENDING, 10));
 
         // Esc: the level packs.
         let mut m = selector(0);
@@ -2982,8 +3168,9 @@ mod tests {
         m.end();
         m.start(LEVEL_SELECT);
         m.level = 390 + m.level_count;
-        press(&mut m, &mut o, ENTER);
-        assert_eq!((m.current, m.world()), (MAIN, 40));
+        let actions = press(&mut m, &mut o, ENTER);
+        assert_eq!(m.world(), 40);
+        assert!(actions.contains(&Action::TowEnding { skip: 0 }));
 
         // Without TOW's folder the line only says no.
         let mut m = Menu::new();

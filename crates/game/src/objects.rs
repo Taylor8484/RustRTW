@@ -737,7 +737,7 @@ fn sync_objects(
         return;
     };
     let world = &sim.world;
-    let lights = world.lights;
+    let lights = sim.lights();
     let list = draws(world, &models, level_style(&level), &anim);
 
     let mut grouped: HashMap<ModelId, Vec<&Draw>> = HashMap::new();

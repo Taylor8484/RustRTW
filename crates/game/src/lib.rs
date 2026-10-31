@@ -26,6 +26,7 @@
 //!   lost level, moves on from a won one.
 //! - [`menu_scene::MenuScenePlugin`]: runs [`menu`] and draws its 3D
 //!   background.
+//! - [`ending_scene::EndingScenePlugin`]: draws the endings.
 //!
 //! The level plugins run in [`flow::Phase::Game`] only, and need the
 //! [`sim::Sim`] and [`level::LevelData`] resources [`flow::begin`] makes.
@@ -33,7 +34,10 @@
 pub mod audio;
 pub mod camera;
 pub mod coords;
+pub mod ending;
+pub mod ending_scene;
 pub mod flow;
+pub mod game_menu;
 pub mod hud;
 pub mod level;
 pub mod level_mesh;
@@ -49,6 +53,7 @@ pub mod shot;
 pub mod sim;
 pub mod style;
 pub mod texture;
+pub mod tow_ending;
 
 use bevy::prelude::*;
 
@@ -68,6 +73,7 @@ impl Plugin for GamePlugins {
             hud::HudPlugin,
             flow::FlowPlugin,
             menu_scene::MenuScenePlugin,
+            ending_scene::EndingScenePlugin,
             shot::ShotPlugin,
         ));
     }

@@ -24,9 +24,8 @@
 //! TOW's playground levels (400 on) go back to the playground's selector
 //! instead, which puts the cursor on its first level again.
 //!
-//! Esc goes back to the level selector or the custom levels (or the main
-//! menu with no player), where the original opens its in-game menu (step
-//! 4f).
+//! Esc opens the in-game menu ([`GameMenu`]) over the level. With no
+//! player (`--level`), selecting a level goes to the main menu too.
 //!
 //! [`Menu::level`]: crate::menu::Menu::level
 //! [`Menu::profile`]: crate::menu::Menu::profile
@@ -37,9 +36,10 @@ use wonderland_campaign::worlds::Content;
 use wonderland_logic::{Completion, Event, Session};
 
 use crate::audio::MenuSounds;
+use crate::game_menu::{Choice, GameMenu};
 use crate::level::{GameData, LevelData};
 use crate::menu::{CUSTOM_LEVELS, MAIN, Menu, MenuSound};
-use crate::menu_scene::MenuState;
+use crate::menu_scene::{MenuState, read_keys};
 use crate::objects::clear_pools;
 use crate::scene::{LevelEntity, spawn_level};
 use crate::sim::{Sim, SimStep};
@@ -106,7 +106,7 @@ impl Plugin for FlowPlugin {
             .add_systems(OnExit(Phase::Game), despawn_level)
             .add_systems(
                 Update,
-                (record_wins, finish_level, to_menu)
+                (record_wins, finish_level, game_menu)
                     .chain()
                     .after(SimStep)
                     .run_if(in_state(Phase::Game)),
@@ -256,30 +256,62 @@ fn finish_level(
     }
 }
 
-/// Esc during play: the menu sound, then the level selector, or the main
-/// menu when no player is playing.
-fn to_menu(
+/// Esc during play (`StartMenu(5)`), and `MenuLoop5` while it is open.
+fn game_menu(
     keys: Res<ButtonInput<KeyCode>>,
+    mut sim: ResMut<Sim>,
     mut menu: ResMut<MenuState>,
     playlist: Option<Res<Playlist>>,
     mut next: ResMut<NextState<Phase>>,
     mut sounds: ResMut<MenuSounds>,
 ) {
-    if keys.just_pressed(KeyCode::Escape) {
+    if let Some(ending) = &mut sim.ending {
+        if ending.leave(read_keys(&keys)) {
+            sim.ending = None;
+            menu.menu.hold_keys();
+            menu.menu.end();
+            menu.menu.start(MAIN);
+            next.set(Phase::Menu);
+        }
+        return;
+    }
+    let Some(open) = &mut sim.menu else {
+        if keys.just_pressed(KeyCode::Escape)
+            && !matches!(sim.world.completion, Completion::Done | Completion::Restart)
+        {
+            sounds.0.push(MenuSound::Move);
+            sim.world.stop_signs_for_menu();
+            sim.menu = Some(GameMenu::new());
+        }
+        return;
+    };
+    let (moved, choice) = open.frame(read_keys(&keys), menu.menu.language);
+    if moved {
         sounds.0.push(MenuSound::Move);
-        let menu = &mut menu.menu;
-        // Esc is still down: the menu must not take it as a press.
-        menu.hold_keys();
-        if menu.profile.is_some() && playlist.is_none() {
-            menu.start(if menu.level == custom::LEVEL {
+    }
+    let Some(choice) = choice else {
+        return;
+    };
+    sim.menu = None;
+    match choice {
+        Choice::Restart => sim.world.kill_players(),
+        Choice::Resume => sim.world.check_signs(),
+        Choice::SelectLevel | Choice::Exit => {
+            let menu = &mut menu.menu;
+            menu.hold_keys();
+            let selector = if menu.level == custom::LEVEL {
                 CUSTOM_LEVELS
             } else {
                 menu.selector_menu()
+            };
+            let own = menu.profile.is_some() && playlist.is_none();
+            menu.start(if choice == Choice::SelectLevel && own {
+                selector
+            } else {
+                MAIN
             });
-        } else {
-            menu.start(MAIN);
+            next.set(Phase::Menu);
         }
-        next.set(Phase::Menu);
     }
 }
 

@@ -778,6 +778,23 @@ impl World {
         self.count_down();
     }
 
+    /// One tick of TOW's ending: only the level's creatures run, with
+    /// nobody playing; the ending sets the camera and lights itself.
+    pub fn step_stage(&mut self) {
+        self.events.clear();
+        self.clock_ms += i64::from(self.ruleset.tick_ms);
+        self.single_volume = [0.0; 17];
+        self.control_monsters();
+        self.control_items();
+        self.control_fish();
+        self.move_monsters();
+        self.end_monster_moves();
+        self.clean_up_monsters();
+        self.clean_up_items();
+        self.level_timer += 1;
+        self.animate_players();
+    }
+
     /// The input half of `UpdateGame`: free camera or player control.
     fn control(&mut self, input: Input) {
         if input.camera && !self.level.view3d {

@@ -94,6 +94,12 @@ pub const TITLE: Track = Track {
     scale: 1.0,
 };
 
+/// The classic ending's music, `res4.dat`.
+pub const ENDING: Track = Track {
+    file: "res4.dat",
+    scale: 1.0,
+};
+
 /// `StartLevelMusic` for `CurrentWorld = world`. Worlds 8 and 28 (counted
 /// from 1) play at half the music level. TOW's worlds (30 on) and the
 /// playground play TOW's choice, [`tow_world_track`].

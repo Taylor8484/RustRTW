@@ -249,7 +249,13 @@ impl Plugin for HudPlugin {
 
 fn game_screen(sim: Res<Sim>, mut screen: ResMut<Screen>) {
     screen.images.clear();
-    screen.letters = all_letters(&sim.world);
+    screen.letters = match &sim.ending {
+        Some(e) => e.text.shown(),
+        None => all_letters(&sim.world),
+    };
+    if let Some(menu) = &sim.menu {
+        screen.letters.extend(menu.text.shown());
+    }
 }
 
 fn spawn_root(mut commands: Commands) {
