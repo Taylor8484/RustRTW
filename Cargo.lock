@@ -5831,6 +5831,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wonderland-editor"
+version = "0.1.0"
+dependencies = [
+ "wonderland-formats",
+ "wonderland-logic",
+]
+
+[[package]]
 name = "wonderland-formats"
 version = "0.1.0"
 dependencies = [

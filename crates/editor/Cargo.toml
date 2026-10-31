@@ -1,0 +1,17 @@
+[package]
+name = "wonderland-editor"
+description = "The level being edited, with undo, for the Wonderland Classic level editor"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wonderland-formats = { path = "../formats" }
+
+[dev-dependencies]
+wonderland-logic = { path = "../logic" }
+
+[lints]
+workspace = true

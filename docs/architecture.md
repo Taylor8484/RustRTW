@@ -38,6 +38,7 @@ crates/
   formats/   pack files, levels v1–v6, saves, options       (no engine deps)
   logic/     deterministic simulation, per-game Ruleset      (no engine deps)
   campaign/  level order & progression per game
+  editor/    the level being edited, undo, saving          (no engine deps)
   game/      Bevy app: menus → play
   inspect/   wl-inspect CLI: dump packs (later levels, saves) for debugging
 data/
@@ -46,8 +47,8 @@ data/
 assets/      copied game data, one folder per game (gitignored, copyrighted)
 ```
 
-Only `game` depends on Bevy. `formats` and `logic` are plain Rust so they can be
-tested headless and outlive any framework upgrade or swap.
+Only `game` depends on Bevy. `formats`, `logic` and `editor` are plain Rust so
+they can be tested headless and outlive any framework upgrade or swap.
 
 ### formats
 
@@ -166,6 +167,23 @@ level packs, WSW's world map and story screens.
   Also the level selector's rules: a world's level count, whether the
   gate forward is open (every level of the pack so far won, or
   `LockWorlds`), the pack's total score and a title's `#` line breaks.
+
+### editor
+
+The level being edited, with no screen. `Editor` always holds a v6 `Level`.
+Changes join a pending edit and `commit` makes that one undo step, so a drag
+undoes as a whole, and `cancel` drops it. A step keeps the cells that changed,
+or the whole old level if the size or header changed. Pieces are placed by
+layer and code, and a character is unique, so placing one moves it.
+
+New levels, sizes (14 to 99 a side) and growing and shrinking follow
+`RTWP/editor.bb`, except that growing keeps anything on the old edge other
+than plain wall. `fit` grows the level around a block placed off it and
+reports how far the cells moved. `save` tidies as `checklevel` does (first of
+each character kept, Stinky at (1, 1) if there are none) and returns the file;
+the caller supplies a new map id. `tests/real_levels.rs` runs random edits on
+every shipped RTWP level, walks undo and redo back and forth, and starts what
+it saves.
 
 ### game
 
