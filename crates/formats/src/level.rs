@@ -17,9 +17,46 @@
 //! [`Level`] holds the values as stored. The loaders also rewrite some of them
 //! while building the level (sign, electro, spike and other tiles become
 //! floor, background 10 becomes 11), and that belongs to level setup, not here.
+//!
+//! [`Level::upgraded`] turns any version into v6, the only one the editor
+//! writes. It follows what `LoadLevelOldVersion` does with a file, not
+//! `RTWP/editor.bb`'s own upgrade, whose tables change some objects: see
+//! [`OBJECTS_V2`] and [`OBJECTS_V1`].
 
 use crate::blitz::{BlitzReader, BlitzWriter};
 use crate::{Error, Game, Result};
+
+/// The magic string of a v6 file.
+const MAGIC_V6: &str = "Stinky & Loof Level File v6";
+
+/// v2–v4 object codes as v5 codes. This is `version5objects`, except that the
+/// fish (41) goes to 48: the editor's 47 is the mother ship.
+const OBJECTS_V2: [i32; 51] = [
+    0, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30,
+    31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 48, 50, 51, 52, 66, 70, 84, 85, 86,
+    87,
+];
+
+/// v1 object codes as v2 codes. This is `version2objects`, except that 46 and
+/// 47 stay the mushroom and the tree: the editor swaps them.
+const OBJECTS_V1: [i32; 51] = [
+    0, 1, 2, 7, 8, 4, 3, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 5, 6,
+    41, 47, 42, 43, 44, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 9, 10, 11, 12, 46, 45, 48, 49,
+    50,
+];
+
+/// Object 88, which turns background 9 into 10 in v5 and later.
+const HIDDEN_RAINBOW: i32 = 88;
+
+/// Looks `code` up in an old object table. The old loaders ignore codes past
+/// the end, as v5 ignores 0.
+fn old_object(table: &[i32; 51], code: i32) -> i32 {
+    usize::try_from(code)
+        .ok()
+        .and_then(|i| table.get(i))
+        .copied()
+        .unwrap_or(0)
+}
 
 /// A level file's contents, as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,9 +75,11 @@ pub struct Level {
     pub houses: Option<CustomDir>,
     /// v5+: custom pillar models (`custommodels\<dir>`).
     pub models: Option<CustomDir>,
-    /// v6: custom textures. RTWP reads but ignores it.
+    /// v6: custom textures (`customtextures\<dir>`), used by style 9. RTWP
+    /// ignores the flag and goes by the style.
     pub textures: Option<CustomDir>,
-    /// v6: custom backgrounds. RTWP reads but ignores it.
+    /// v6: custom backdrop (`custombackgrounds\<dir>`), used by background
+    /// 11. RTWP ignores the flag and goes by the background.
     pub backgrounds: Option<CustomDir>,
     /// Time limit.
     pub time: i32,
@@ -201,6 +240,62 @@ impl Level {
         w.into_bytes()
     }
 
+    /// This level as a v6 file that plays the same. A level before v5 changes
+    /// as follows, and later versions only gain the empty v6 fields:
+    ///
+    /// - Button tiles from 1103 move up 3, past the timer buttons. 1197 and up
+    ///   have no such code and stay.
+    /// - Objects move to their v5 codes.
+    /// - Background 10 becomes 9 and object 88, as v5 reads 10 as 11. A level
+    ///   with no empty object cell has no room for it and keeps the 10.
+    /// - Signs grow to 20, and a level before v4 gets music track 0. It used
+    ///   to inherit the track and sign texts of the level played before it.
+    /// - A TOW level gets map id 0. Saving a level sets a new id anyway.
+    ///
+    /// Old tiles in classes that only mean something from v5 (transporters,
+    /// box factories and the like) are left as they are; the old editors could
+    /// not place them.
+    pub fn upgraded(&self) -> Self {
+        let mut level = self.clone();
+        let empty = || {
+            Some(CustomDir {
+                flag: 0,
+                dir: String::new(),
+            })
+        };
+        level.magic = MAGIC_V6.into();
+        level.version = 6;
+        level.map_id = level.map_id.or(Some(0));
+        level.houses = level.houses.or_else(empty);
+        level.models = level.models.or_else(empty);
+        level.textures = level.textures.or_else(empty);
+        level.backgrounds = level.backgrounds.or_else(empty);
+        level.signs.resize(20, String::new());
+        level.music_track = level.music_track.or(Some(0));
+        if self.version >= 5 {
+            return level;
+        }
+
+        for tile in &mut level.tiles {
+            if (1103..1197).contains(tile) {
+                *tile += 3;
+            }
+        }
+        for object in &mut level.objects {
+            if self.version == 1 {
+                *object = old_object(&OBJECTS_V1, *object);
+            }
+            *object = old_object(&OBJECTS_V2, *object);
+        }
+        if level.background == 10
+            && let Some(free) = level.objects.iter_mut().find(|o| **o == 0)
+        {
+            *free = HIDDEN_RAINBOW;
+            level.background = 9;
+        }
+        level
+    }
+
     /// Index of tile `(x, y)` in `tiles` and `objects`.
     pub fn index(&self, x: usize, y: usize) -> usize {
         debug_assert!(x < self.width && y < self.height);
@@ -342,6 +437,84 @@ mod tests {
         );
         assert_eq!(Level::parse(&v1, Game::Tow).unwrap().to_bytes(), v1);
         assert_eq!(Level::parse(&v6, Game::Rtwp).unwrap().to_bytes(), v6);
+    }
+
+    fn old_level(version: u8) -> Level {
+        Level {
+            magic: format!("Stinky & Loof Level File v{version}"),
+            version,
+            file_name: "a.lev".into(),
+            map_id: Some(42),
+            description: "Old".into(),
+            houses: None,
+            models: None,
+            textures: None,
+            backgrounds: None,
+            time: 300,
+            style: 2,
+            background: 4,
+            width: 2,
+            height: 1,
+            tiles: vec![1103, 1102],
+            objects: vec![41, 0],
+            signs: vec!["sign".into(); 5],
+            music_track: (version >= 4).then_some(7),
+        }
+    }
+
+    #[test]
+    fn upgrade_fills_in_the_v6_fields() {
+        let l = old_level(3).upgraded();
+        assert_eq!(l.magic, "Stinky & Loof Level File v6");
+        assert_eq!((l.version, l.map_id, l.music_track), (6, Some(42), Some(0)));
+        assert_eq!(l.backgrounds, l.houses);
+        assert_eq!(l.houses.as_ref().unwrap().dir, "");
+        assert!(!l.textures.as_ref().unwrap().enabled());
+        assert_eq!(l.signs.len(), 20);
+        assert_eq!((l.signs[4].as_str(), l.signs[5].as_str()), ("sign", ""));
+        assert_eq!(old_level(4).upgraded().music_track, Some(7));
+        assert_eq!(Level::parse(&l.to_bytes(), Game::Rtwp).unwrap(), l);
+    }
+
+    #[test]
+    fn upgrade_recodes_tiles_and_objects() {
+        let l = old_level(4).upgraded();
+        assert_eq!(l.tiles, [1106, 1102]);
+        assert_eq!(l.objects, [48, 0]);
+        let mut v1 = old_level(1);
+        v1.objects = vec![46, 47];
+        assert_eq!(v1.upgraded().objects, [70, 66]);
+        v1.objects = vec![51, -1];
+        assert_eq!(v1.upgraded().objects, [0, 0]);
+    }
+
+    #[test]
+    fn upgrade_keeps_the_hidden_rainbow_background() {
+        let mut old = old_level(4);
+        old.background = 10;
+        let l = old.upgraded();
+        assert_eq!((l.background, l.objects[1]), (9, 88));
+        old.objects = vec![1, 2];
+        assert_eq!(old.upgraded().background, 10);
+    }
+
+    #[test]
+    fn upgrade_leaves_newer_codes_alone() {
+        let mut v5 = old_level(5);
+        v5.houses = Some(CustomDir {
+            flag: 1,
+            dir: "h".into(),
+        });
+        v5.models = v5.houses.clone();
+        v5.signs = vec![String::new(); 20];
+        v5.music_track = Some(7);
+        let l = v5.upgraded();
+        assert_eq!((l.tiles, l.objects), (v5.tiles.clone(), v5.objects.clone()));
+        assert_eq!(l.houses, v5.houses);
+        assert!(l.textures.is_some());
+
+        let v6 = v5.upgraded();
+        assert_eq!(v6.upgraded(), v6);
     }
 
     #[test]

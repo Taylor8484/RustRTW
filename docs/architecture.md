@@ -59,7 +59,10 @@ tested headless and outlive any framework upgrade or swap.
 - `assets` — resolves a game path the way the original does: pack first
   (case-insensitive), then a loose file in the game folder.
 - `level` — level files v1–v6 as stored. Parsing takes the loading `Game`
-  because TOW, RTWP and WSW read the header differently.
+  because TOW, RTWP and WSW read the header differently. `Level::upgraded`
+  turns any version into v6, following the game's loaders rather than the
+  original editor's tables; `crates/logic/tests/upgrade.rs` checks that the
+  result sets up the same.
 - `catalogue` — the pieces of v5 and v6 levels: each family of tile or
   object codes as one named piece with choices (direction, timing, colour),
   its palette group and its sprite in the original editor's sheets.
