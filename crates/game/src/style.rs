@@ -3,9 +3,9 @@
 //!
 //! The style sets the floor and wall textures; the background sets the
 //! backdrop texture and its scale. Style 9 (custom textures) and background
-//! 11 (custom backdrop) read per-level folders the port does not support
-//! yet, so they fall back the way the original does when the files are
-//! missing: style 9 to 2 (wood), background 11 to 3 (stars).
+//! 11 (custom backdrop) read per-level folders, and [`apply_custom`] puts
+//! those over the fallbacks the original uses when the files are missing:
+//! style 9 to 2 (wood), background 11 to 3 (stars).
 
 use wonderland_formats::{GameAssets, Level};
 
@@ -61,6 +61,72 @@ pub struct LevelTextures {
     pub lava: TextureRef,
     /// `BackGroundTexture` and its `ScaleTexture`, if the background has one.
     pub background: Option<(TextureRef, f32)>,
+}
+
+/// The files style 9 needs in its folder, or it falls back to wood.
+const CUSTOM_FILES: [&str; 13] = [
+    "floor1",
+    "floor2",
+    "floor3",
+    "floor4",
+    "walltop",
+    "sign",
+    "wallside1a",
+    "wallside1b",
+    "wallside2a",
+    "wallside2b",
+    "wallside3a",
+    "wallside3b",
+    "break",
+];
+
+/// The folder style 9 reads, if every file is there as loose files.
+/// Like the original, this goes by the style and ignores the header's flag.
+fn custom_texture_dir(level: &Level, assets: &GameAssets) -> Option<String> {
+    let dir = level.textures.as_ref().filter(|_| level.style == 9)?;
+    let base = format!("customtextures\\{}\\", dir.dir);
+    CUSTOM_FILES
+        .iter()
+        .all(|f| assets.resolve(&format!("{base}{f}.jpg")).is_some())
+        .then_some(base)
+}
+
+/// The breakaway floor of a style 9 level.
+pub fn custom_break(level: &Level, assets: &GameAssets) -> Option<String> {
+    Some(format!("{}break.jpg", custom_texture_dir(level, assets)?))
+}
+
+/// `LoadStyleTextures`' style 9 and `MapBackground=11`, over what
+/// [`level_textures`] chose for their fallbacks.
+pub fn apply_custom(
+    textures: &mut LevelTextures,
+    level: &Level,
+    background: i32,
+    snow: bool,
+    assets: &GameAssets,
+) {
+    if let Some(base) = custom_texture_dir(level, assets) {
+        let file = |name: &str| TextureRef::colour(&format!("{base}{name}.jpg"));
+        let ice = textures.floor[3].clone();
+        textures.floor = std::array::from_fn(|i| file(&format!("floor{}", i + 1)));
+        if snow {
+            textures.floor[3] = ice;
+        }
+        textures.wall_top = file("walltop");
+        textures.floor_sign = file("sign");
+        textures.wall_side =
+            ["1a", "1b", "2a", "2b", "3a", "3b"].map(|s| file(&format!("wallside{s}")));
+        textures.teleport =
+            std::array::from_fn(|i| TextureRef::colour(&format!("graphics\\gentele{i}.jpg")));
+    }
+    if background == 11
+        && let Some(dir) = &level.backgrounds
+    {
+        let path = format!("custombackgrounds\\{}\\back.jpg", dir.dir);
+        if assets.resolve(&path).is_some() {
+            textures.background = Some((TextureRef::colour(&path), 50.0));
+        }
+    }
 }
 
 /// The background after the original's fallbacks.
@@ -209,6 +275,63 @@ pub fn level_textures(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A style 9, custom background level with `files` under its folders.
+    fn custom(name: &str, files: &[&str]) -> (GameAssets, Level) {
+        let root = std::env::temp_dir().join(format!("wl-style-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for f in files {
+            let file = root.join(f);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, b"x").unwrap();
+        }
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = wonderland_formats::level::CustomDir {
+            flag: 1,
+            dir: "SNOW".to_owned(),
+        };
+        let level = Level {
+            style: 9,
+            textures: Some(dir.clone()),
+            backgrounds: Some(dir),
+            ..wonderland_editor::Editor::new().level().clone()
+        };
+        (GameAssets::open(root).unwrap(), level)
+    }
+
+    #[test]
+    fn a_full_texture_folder_replaces_the_fallback() {
+        let files: Vec<String> = CUSTOM_FILES
+            .iter()
+            .map(|f| format!("customtextures/SNOW/{f}.jpg"))
+            .chain(["custombackgrounds/SNOW/back.jpg".to_owned()])
+            .collect();
+        let files: Vec<&str> = files.iter().map(String::as_str).collect();
+        let (assets, level) = custom("full", &files);
+        let mut t = level_textures(9, 11, false, 0);
+        apply_custom(&mut t, &level, 11, false, &assets);
+        assert_eq!(t.floor[1].path, r"customtextures\SNOW\floor2.jpg");
+        assert_eq!(t.wall_side[5].path, r"customtextures\SNOW\wallside3b.jpg");
+        assert_eq!(t.teleport[2].path, r"graphics\gentele2.jpg");
+        assert_eq!(
+            t.background.unwrap().0.path,
+            r"custombackgrounds\SNOW\back.jpg"
+        );
+        assert_eq!(
+            custom_break(&level, &assets).as_deref(),
+            Some(r"customtextures\SNOW\break.jpg")
+        );
+    }
+
+    #[test]
+    fn a_folder_missing_a_file_keeps_the_fallback() {
+        let (assets, level) = custom("part", &["customtextures/SNOW/floor1.jpg"]);
+        let plain = level_textures(9, 11, false, 0);
+        let mut t = plain.clone();
+        apply_custom(&mut t, &level, 11, false, &assets);
+        assert_eq!(t, plain);
+        assert_eq!(custom_break(&level, &assets), None);
+    }
 
     #[test]
     fn styles_follow_the_original_quirks() {

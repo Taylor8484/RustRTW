@@ -20,7 +20,7 @@ use crate::lighting;
 use crate::objects::Models;
 use crate::sim::{Sim, SimStep, TickAnim};
 use crate::style::{
-    LevelTextures, TextureRef, effective_background, effective_style, level_textures,
+    LevelTextures, TextureRef, apply_custom, effective_background, effective_style, level_textures,
 };
 use crate::texture;
 
@@ -237,11 +237,18 @@ pub fn spawn_level(
     let setup = &level.setup;
     let background = effective_background(setup.background);
     let style = effective_style(setup.style, background);
-    let textures = level_textures(
+    let mut textures = level_textures(
         setup.style,
         setup.background,
         setup.weather.snow,
         data.teleport_option,
+    );
+    apply_custom(
+        &mut textures,
+        &level.level,
+        setup.background,
+        setup.weather.snow,
+        &data.assets,
     );
 
     for s in construct_level(&setup.grid, background) {

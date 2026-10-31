@@ -7,6 +7,7 @@
 
 use wonderland_formats::catalogue::{self, Group, Layer};
 
+use crate::links::Spot;
 use crate::{Clip, Editor, FLOOR};
 
 /// A cell, which may be off the level.
@@ -26,6 +27,8 @@ pub enum Tool {
     Select,
     Brush(Brush),
     Erase,
+    /// Draws a connection from one piece to another.
+    Link,
 }
 
 /// A block of cells inside the level.
@@ -56,6 +59,42 @@ pub enum Gesture {
     Piece { from: Cell, to: Cell, brush: Brush },
     /// Dragging the selection, which moves on release.
     Move { from: Cell, to: Cell },
+    /// Drawing a connection, which is made on release.
+    Link { from: Cell, to: Cell },
+}
+
+/// `brush` turned one step, for the first choice that is a direction, or
+/// else the first choice of any kind.
+pub fn turned(brush: Brush) -> Brush {
+    let Some(piece) = catalogue::find(brush.layer, brush.code) else {
+        return brush;
+    };
+    let Some(axis) = piece
+        .axes
+        .iter()
+        .position(|a| matches!(a.name, "Direction" | "Facing"))
+        .or((!piece.axes.is_empty() && piece.group != Group::Sign).then_some(0))
+    else {
+        return brush;
+    };
+    let mut choices = piece.choices(brush.code);
+    choices[axis] = (choices[axis] + 1) % piece.axes[axis].values.len();
+    Brush {
+        code: piece.code(&choices),
+        ..brush
+    }
+}
+
+/// Whether `brush` is a sign, whose slot [`Editor::new_sign`] gives.
+fn is_sign(brush: Brush) -> bool {
+    catalogue::find(brush.layer, brush.code).is_some_and(|p| p.group == Group::Sign)
+}
+
+fn spot(editor: &Editor, (x, y): Cell) -> Option<Spot> {
+    let level = editor.level();
+    let x = usize::try_from(x).ok().filter(|&x| x < level.width)?;
+    let y = usize::try_from(y).ok().filter(|&y| y < level.height)?;
+    Some((x, y))
 }
 
 /// The cells from `from` to `to`, leaving out `from`.
@@ -129,7 +168,11 @@ impl Canvas {
                 shift(start);
                 shift(end);
             }
-            Some(Gesture::Piece { from, to, .. } | Gesture::Move { from, to }) => {
+            Some(
+                Gesture::Piece { from, to, .. }
+                | Gesture::Move { from, to }
+                | Gesture::Link { from, to },
+            ) => {
                 shift(from);
                 shift(to);
             }
@@ -157,6 +200,9 @@ impl Canvas {
         let Some(moved) = editor.fit(x, y, 1, 1) else {
             return false;
         };
+        if moved != (0, 0) {
+            editor.tuck_settings();
+        }
         self.moved(moved);
         let (x, y) = (x + moved.0 as isize, y + moved.1 as isize);
         editor.place(x as usize, y as usize, brush.layer, brush.code);
@@ -174,7 +220,27 @@ impl Canvas {
             }
             return;
         };
-        self.put(editor, (x, y), brush);
+        self.put_new(editor, (x, y), brush);
+    }
+
+    /// [`Canvas::put`] for a piece new to the level, which a sign needs a
+    /// slot for. Returns false if there is none.
+    fn put_new(&mut self, editor: &mut Editor, cell: Cell, brush: Brush) -> bool {
+        if !is_sign(brush) {
+            return self.put(editor, cell, brush);
+        }
+        if spot(editor, cell).is_some_and(|(x, y)| {
+            is_sign(Brush {
+                layer: Layer::Tile,
+                code: editor.level().tile(x, y),
+            })
+        }) {
+            return true;
+        }
+        match editor.new_sign() {
+            Some(code) => self.put(editor, cell, Brush { code, ..brush }),
+            None => false,
+        }
     }
 
     /// The pointer went down on `cell`. `erase` is the erasing button, and
@@ -187,6 +253,13 @@ impl Canvas {
         let brush = match tool {
             Tool::Brush(brush) => Some(brush),
             Tool::Erase => None,
+            Tool::Link => {
+                self.gesture = Some(Gesture::Link {
+                    from: cell,
+                    to: cell,
+                });
+                return;
+            }
             Tool::Select => {
                 self.gesture = Some(self.select_gesture(editor, cell, band));
                 return;
@@ -257,6 +330,9 @@ impl Canvas {
             Some(Gesture::Move { from, .. }) => {
                 self.gesture = Some(Gesture::Move { from, to: cell });
             }
+            Some(Gesture::Link { from, .. }) => {
+                self.gesture = Some(Gesture::Link { from, to: cell });
+            }
             None => {}
         }
     }
@@ -295,6 +371,12 @@ impl Canvas {
                     if !self.drop_clip(editor, at, &clip) {
                         return self.cancel(editor);
                     }
+                }
+            }
+            Some(Gesture::Link { from, to }) => {
+                self.gesture = None;
+                if let (Some(from), Some(to)) = (spot(editor, from), spot(editor, to)) {
+                    editor.link(from, to);
                 }
             }
             Some(Gesture::Stroke { .. }) | None => self.gesture = None,
@@ -342,7 +424,7 @@ impl Canvas {
 
     /// A piece dragged from the palette was dropped on `cell`.
     pub fn drop_piece(&mut self, editor: &mut Editor, cell: Cell, brush: Brush) {
-        self.put(editor, cell, brush);
+        self.put_new(editor, cell, brush);
         self.finish(editor);
     }
 
@@ -358,6 +440,8 @@ impl Canvas {
             (at.1 + moved.1 as isize) as usize,
         );
         editor.paste(x, y, clip);
+        editor.split_signs();
+        editor.tuck_settings();
         self.selection = Some(Block {
             x,
             y,
@@ -625,6 +709,84 @@ mod tests {
         assert!(canvas.paste(&mut editor, (13, 5)));
         assert_eq!(editor.level().width, MIN_SIZE + 1);
         assert_eq!(editor.level().object(13, 5), COIN.code);
+    }
+
+    #[test]
+    fn a_painted_sign_takes_the_next_slot_and_a_moved_one_keeps_its_own() {
+        const SIGN: Brush = Brush {
+            layer: Layer::Tile,
+            code: 1300,
+        };
+        let (mut editor, mut canvas) = painting(SIGN);
+        canvas.press(&mut editor, (2, 2), false, false);
+        canvas.hover(&mut editor, (3, 2));
+        canvas.release(&mut editor);
+        assert_eq!(editor.level().tile(2, 2), 1300);
+        assert_eq!(editor.level().tile(3, 2), 1301);
+        // Going over a sign leaves it.
+        canvas.press(&mut editor, (3, 2), false, false);
+        canvas.release(&mut editor);
+        assert_eq!(editor.level().tile(3, 2), 1301);
+
+        canvas.tool = Tool::Select;
+        canvas.press(&mut editor, (3, 2), false, false);
+        canvas.hover(&mut editor, (5, 5));
+        canvas.release(&mut editor);
+        assert_eq!(editor.level().tile(5, 5), 1301);
+    }
+
+    #[test]
+    fn a_pasted_sign_gets_a_slot_and_the_words() {
+        let mut canvas = Canvas::default();
+        let mut editor = Editor::new();
+        editor.place(2, 2, Layer::Tile, 1300);
+        editor.set_sign_text(0, "HI");
+        editor.commit();
+        canvas.press(&mut editor, (2, 2), false, true);
+        canvas.release(&mut editor);
+        canvas.copy(&editor);
+        canvas.paste(&mut editor, (6, 6));
+        assert_eq!(editor.level().tile(6, 6), 1301);
+        assert_eq!(editor.sign_text(1), "HI");
+    }
+
+    #[test]
+    fn drawing_a_link_connects_two_pieces_as_one_step() {
+        let mut canvas = Canvas {
+            tool: Tool::Link,
+            ..Canvas::default()
+        };
+        let mut editor = Editor::new();
+        editor.place(2, 2, Layer::Tile, 1100);
+        editor.place(5, 5, Layer::Tile, 1002);
+        editor.commit();
+        canvas.press(&mut editor, (2, 2), false, false);
+        canvas.hover(&mut editor, (5, 5));
+        canvas.release(&mut editor);
+        assert_eq!(editor.level().tile(2, 2), 1106);
+        assert!(editor.undo());
+        assert_eq!(editor.level().tile(2, 2), 1100);
+    }
+
+    #[test]
+    fn turning_uses_the_direction_or_else_the_first_choice() {
+        let cannon = Brush {
+            layer: Layer::Tile,
+            code: 800,
+        };
+        assert_eq!(turned(cannon).code, 804);
+        let spikes = Brush {
+            layer: Layer::Tile,
+            code: 1400,
+        };
+        assert_eq!(turned(spikes).code, 1401);
+        assert_eq!(turned(WATER), WATER);
+        // Wraps round.
+        let last = Brush {
+            layer: Layer::Tile,
+            code: 812,
+        };
+        assert_eq!(turned(last).code, 800);
     }
 
     #[test]

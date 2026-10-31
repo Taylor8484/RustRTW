@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use wonderland_editor::links::warnings;
 use wonderland_editor::{Editor, Side};
 use wonderland_formats::catalogue::{Group, Layer, PIECES};
 use wonderland_formats::{Game, GameAssets, Level};
@@ -112,4 +113,41 @@ fn every_level_edits_undoes_and_saves() {
         }
     }
     assert!(levels > 100, "only {levels} levels");
+}
+
+/// The shipped levels all work, so the warnings should rarely speak of them.
+/// `cargo test warnings -- --nocapture` lists what they say.
+#[test]
+fn warnings_on_shipped_levels() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/RTWP");
+    if !dir.is_dir() {
+        eprintln!("skipping: {} not found", dir.display());
+        return;
+    }
+    let assets = GameAssets::open(&dir).unwrap();
+    let pack = assets.pack().unwrap();
+    let mut seen = std::collections::BTreeMap::<String, Vec<String>>::new();
+    let mut levels = 0;
+    for entry in pack.index().entries() {
+        let name = entry.name.to_lowercase();
+        if !name.ends_with(".lev") && !name.ends_with(".lv5") {
+            continue;
+        }
+        levels += 1;
+        let level = Level::parse(pack.entry_data(entry), Game::Rtwp).unwrap();
+        let editor = Editor::open(level);
+        for w in warnings(editor.level()) {
+            seen.entry(w.message).or_default().push(name.clone());
+        }
+    }
+    println!("{levels} levels");
+    for (message, names) in &seen {
+        println!(
+            "{message}: {} {:?}",
+            names.len(),
+            &names[..names.len().min(5)]
+        );
+    }
+    let total: usize = seen.values().map(Vec::len).sum();
+    assert!(total <= 4, "false alarms: {seen:?}");
 }

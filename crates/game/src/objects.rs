@@ -37,7 +37,9 @@ use crate::lighting::light_direction;
 use crate::model::{Geometry, Model, ModelId, blitz_quat, custom_pillar, load, player_skins};
 use crate::scene::{LevelEntity, TextureCache};
 use crate::sim::{Sim, SimStep, TickAnim};
-use crate::style::{TextureRef, effective_background, effective_style, house_textures};
+use crate::style::{
+    TextureRef, custom_break, effective_background, effective_style, house_textures,
+};
 
 /// How a draw's texture coordinates differ from its model's.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -121,6 +123,8 @@ pub struct Models {
     custom: HashMap<ModelId, Model>,
     /// `HouseTexture(1–4)`.
     houses: [String; 4],
+    /// The breakaway floor of a level with its own textures.
+    breakaway: Option<String>,
     /// What `PillarMesh(26–29)` draws.
     pillars: [Vec<ModelId>; 4],
     missing: Model,
@@ -147,6 +151,7 @@ impl Models {
             map,
             custom: HashMap::new(),
             houses: std::array::from_fn(|i| format!("graphics\\house{}.jpg", i + 1)),
+            breakaway: None,
             pillars: std::array::from_fn(|i| vec![ModelId::Pillar(26 + i)]),
             missing: Model {
                 def: crate::model::model_def(ModelId::Square),
@@ -170,6 +175,7 @@ impl Models {
     /// cannot be read is reported and keeps the default.
     pub fn set_level(&mut self, level: &Level, assets: &GameAssets) {
         self.houses = house_textures(level, assets);
+        self.breakaway = custom_break(level, assets);
         self.custom.clear();
         self.pillars = std::array::from_fn(|i| vec![ModelId::Pillar(26 + i)]);
         let Some(dir) = level.models.as_ref().filter(|d| d.enabled()) else {
@@ -574,8 +580,13 @@ pub fn draws(w: &World, models: &Models, style: i32, anim: &TickAnim) -> Vec<Dra
     for (x, y) in g.cells() {
         let tile = g.get(x, y);
         if tile / 100 == 6 {
-            let draw = d(ModelId::Square, [x as f32, 0.0, -(y as f32)])
-                .texture(&breakaway_texture(style, tile - 600), 1);
+            let draw = d(ModelId::Square, [x as f32, 0.0, -(y as f32)]).texture(
+                &models
+                    .breakaway
+                    .clone()
+                    .unwrap_or_else(|| breakaway_texture(style, tile - 600)),
+                1,
+            );
             out.push(Draw {
                 uv: Uv::Rect([0.0, 0.0, 1.0, 1.0]),
                 ..draw

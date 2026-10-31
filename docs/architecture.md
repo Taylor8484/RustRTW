@@ -186,7 +186,17 @@ test play and leaves the edit alone.
 `canvas` turns pointer gestures into edits with no Bevy types: strokes with no
 gaps, dragging a piece or the selection, selecting, copy and paste. A piece put
 on or past the outer wall grows the level, and `take_shift` reports how far the
-cells moved so that the screen can keep the picture still. `tests/real_levels.rs` runs random edits on
+cells moved so that the screen can keep the picture still.
+
+`settings` shows the whole level's choices as one set, whether the format keeps
+them in the header or as pieces: weather, tint and house style go on the outer
+wall, and the 3D view on a floor cell. `signs` hands out the 20 text slots as
+signs are placed, and gives a pasted sign its own slot and the same words.
+`links` reads what connects pieces (a button's target, a pair of teleporters)
+for drawing, sets it when a link is drawn, and `warnings` reports what will not
+work: no exit, a lone teleporter, a button or gate with no partner, an empty
+sign, and the game's limits on boxes, monsters and signs. `tests/real_levels.rs`
+keeps the warnings quiet on the shipped levels. `tests/real_levels.rs` runs random edits on
 every shipped RTWP level, walks undo and redo back and forth, and starts what
 it saves.
 
@@ -307,7 +317,9 @@ pinned and upgraded deliberately.
   tilts to the play camera. `editor_ui` draws the panels in `bevy_egui` and
   projects the grid, the selection and sprite markers for pieces unseen from
   above onto the canvas; it changes nothing itself, but asks through
-  `Studio::request`, as the keys do. Saves go to `CustomLevels/<NAME>.LV6`.
+  `Studio::request`, as the keys do. Clicking a piece opens a popup with its
+  choices and a sign's text, and a panel holds the level's settings and
+  warnings. Saves go to `CustomLevels/<NAME>.LV6`.
   Test play starts a tidied copy from memory, from the level's start or the
   pointer, so nothing is written; while `Editing` exists a win or leaving
   through the in-game menu returns to the editor and no score is kept.

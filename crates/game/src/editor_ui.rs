@@ -4,7 +4,9 @@
 //! left is [`Studio::canvas_area`], and everything drawn there is projected
 //! from the level, so it stays right when the camera tilts: the cell grid,
 //! the pointer's cell, the selection and sprites for the pieces that cannot
-//! be seen from above. The sprites are the original editor's.
+//! be seen from above, the links and the warnings. The sprites are the
+//! original editor's. Clicking a piece opens a popup beside it with its
+//! choices, and a sign's text.
 
 use std::collections::HashMap;
 
@@ -15,7 +17,12 @@ use bevy_egui::egui::{
 };
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle};
 use wonderland_editor::canvas::{Block, Brush, Cell, Gesture, Tool};
-use wonderland_formats::catalogue::{self, Group, Layer, PIECES, Piece, Sprite};
+use wonderland_editor::settings::{
+    self, BACKGROUNDS, CUSTOM_BACKGROUND, CUSTOM_STYLE, Folder, HOUSE_STYLES, MUSIC, STYLES,
+    Setting, TINTS,
+};
+use wonderland_editor::signs::{sign_lines, stored_sign};
+use wonderland_formats::catalogue::{self, Axis, Group, Layer, PIECES, Piece, Sprite};
 
 use crate::camera::GameCamera;
 use crate::editor_scene::{Dialog, Editing, Leaving, Request, Studio};
@@ -40,6 +47,13 @@ const GRID: Color32 = Color32::from_rgba_premultiplied(30, 30, 30, 30);
 const EDGE: Color32 = Color32::from_rgb(255, 220, 90);
 const HOVER: Color32 = Color32::WHITE;
 const CHOSEN: Color32 = Color32::from_rgb(90, 200, 255);
+const LINK: Color32 = Color32::from_rgb(120, 255, 140);
+const FAINT_LINK: Color32 = Color32::from_rgba_premultiplied(50, 110, 60, 110);
+const WARNING: Color32 = Color32::from_rgb(255, 80, 60);
+/// More choices than this go in a list instead of buttons.
+const MAX_BUTTONS: usize = 5;
+const SIGN: std::ops::Range<i32> = 1300..1320;
+const POPUP_WIDTH: f32 = 200.0;
 
 /// One of the original editor's sprite sheets, loaded for egui.
 struct Sheet {
@@ -66,6 +80,7 @@ impl Sheet {
 struct Palette {
     sheets: HashMap<&'static str, Option<Sheet>>,
     picked: Option<(&'static Piece, Vec<usize>)>,
+    hide_links: bool,
 }
 
 impl Palette {
@@ -92,6 +107,33 @@ impl Palette {
     }
 }
 
+/// The choices a person makes: a sign's slot is handed out for them.
+fn shown_axes(piece: &Piece) -> impl Iterator<Item = (usize, &Axis)> {
+    let sign = piece.group == Group::Sign;
+    piece.axes.iter().enumerate().filter(move |_| !sign)
+}
+
+/// One choice, as buttons or a list. Returns whether it changed.
+fn axis_choice(ui: &mut egui::Ui, axis: &Axis, choice: &mut usize) -> bool {
+    let before = *choice;
+    if axis.values.len() <= MAX_BUTTONS {
+        ui.horizontal_wrapped(|ui| {
+            for (v, value) in axis.values.iter().enumerate() {
+                ui.selectable_value(choice, v, *value);
+            }
+        });
+    } else {
+        egui::ComboBox::from_id_salt(axis.name)
+            .selected_text(axis.values[*choice])
+            .show_ui(ui, |ui| {
+                for (v, value) in axis.values.iter().enumerate() {
+                    ui.selectable_value(choice, v, *value);
+                }
+            });
+    }
+    *choice != before
+}
+
 fn brush(piece: &Piece, choices: &[usize]) -> Brush {
     Brush {
         layer: piece.layer,
@@ -100,12 +142,13 @@ fn brush(piece: &Piece, choices: &[usize]) -> Brush {
 }
 
 /// A piece seen edge on or not at all from above, which gets its sprite.
-fn needs_marker(layer: Layer, code: i32) -> bool {
+/// Settings on the outer wall are the settings panel's.
+fn needs_marker(layer: Layer, code: i32, inside: bool) -> bool {
     const COIN: i32 = 5;
     const CLOCK: i32 = 7;
     const BONUS_COIN: i32 = 8;
     matches!(code, COIN | CLOCK | BONUS_COIN) && layer == Layer::Object
-        || catalogue::find(layer, code).is_some_and(|p| p.group == Group::Setting)
+        || inside && catalogue::find(layer, code).is_some_and(|p| p.group == Group::Setting)
 }
 
 pub struct EditorUiPlugin;
@@ -218,6 +261,13 @@ fn panels(
         )
     });
     egui::Panel::bottom("status").show(&mut root, |ui| status_line(ui, studio, &editing));
+    egui::Panel::right("level")
+        .default_size(190.0)
+        .show(&mut root, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                level_panel(ui, studio, palette, &editing);
+            });
+        });
     egui::Panel::left("palette")
         .default_size(190.0)
         .show(&mut root, |ui| {
@@ -256,7 +306,231 @@ fn panels(
             EguiRect::from_center_size(egui::pos2(pointer.x, pointer.y), EguiVec::splat(ICON));
         painter.image(id, rect, uv, Color32::WHITE);
     }
+    if let Ok((camera, transform)) = camera.single() {
+        let projection = Projection { camera, transform };
+        popup(&ctx, &projection, studio, &editing);
+    }
     dialogs(&ctx, studio);
+}
+
+/// The choices of the one piece selected, beside it.
+fn popup(ctx: &egui::Context, projection: &Projection, studio: &mut Studio, editing: &Editing) {
+    let Some(block) = studio.canvas.selection() else {
+        return;
+    };
+    if (block.width, block.height) != (1, 1) || studio.canvas.gesture().is_some() {
+        return;
+    }
+    let spot = (block.x, block.y);
+    let (layer, code) = editing.0.top(spot.0, spot.1);
+    let Some(piece) = catalogue::find(layer, code) else {
+        return;
+    };
+    let sign = layer == Layer::Tile && SIGN.contains(&code);
+    let Some(at) = projection.point(spot.0 as f32 + 1.2, spot.1 as f32) else {
+        return;
+    };
+    if piece.axes.is_empty() {
+        return;
+    }
+    let mut choices = piece.choices(code);
+    egui::Window::new(piece.name)
+        .id("piece".into())
+        .collapsible(false)
+        .resizable(false)
+        .fixed_pos(at)
+        .default_width(POPUP_WIDTH)
+        .max_width(POPUP_WIDTH)
+        .show(ctx, |ui| {
+            for (i, axis) in shown_axes(piece) {
+                ui.label(axis.name);
+                if axis_choice(ui, axis, &mut choices[i]) {
+                    let brush = brush(piece, &choices);
+                    studio.request.push(Request::SetPiece(spot, brush));
+                }
+            }
+            if sign {
+                let slot = (code - SIGN.start) as usize;
+                let mut text = sign_lines(editing.0.sign_text(slot));
+                ui.label("Sign text, up to four lines:");
+                let response = ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_rows(4)
+                        .desired_width(190.0),
+                );
+                if response.changed() {
+                    let text = stored_sign(&text);
+                    studio.request.push(Request::SignText(slot, text));
+                }
+                if response.lost_focus() {
+                    studio.request.push(Request::Commit);
+                }
+            }
+        });
+}
+
+fn on_off(ui: &mut egui::Ui, studio: &mut Studio, on: bool, label: &str, code: i32) {
+    let mut now = on;
+    if ui.checkbox(&mut now, label).changed() {
+        studio
+            .request
+            .push(Request::Setting(Setting::Flag(code, now)));
+    }
+}
+
+/// Picks one of `names` or none, as `Option` of its place.
+fn optional_list(
+    ui: &mut egui::Ui,
+    id: &str,
+    now: Option<usize>,
+    names: &[String],
+) -> Option<Option<usize>> {
+    let shown = now
+        .and_then(|i| names.get(i))
+        .map_or("None", String::as_str);
+    let mut picked = None;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(shown)
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(now.is_none(), "None").clicked() {
+                picked = Some(None);
+            }
+            for (i, name) in names.iter().enumerate() {
+                if ui.selectable_label(now == Some(i), name).clicked() {
+                    picked = Some(Some(i));
+                }
+            }
+        });
+    picked
+}
+
+fn level_panel(ui: &mut egui::Ui, studio: &mut Studio, palette: &mut Palette, editing: &Editing) {
+    let editor = &editing.0;
+    let level = editor.level();
+    ui.strong("Level");
+    let mut ask = |request| studio.request.push(Request::Setting(request));
+
+    let mut time = level.time;
+    ui.horizontal(|ui| {
+        ui.label("Time");
+        let drag = egui::DragValue::new(&mut time)
+            .range(settings::MIN_TIME..=settings::MAX_TIME)
+            .speed(settings::TIME_STEP);
+        if ui.add(drag).changed() {
+            ask(Setting::Time(time - time % settings::TIME_STEP));
+        }
+    });
+    ui.label("Style");
+    egui::ComboBox::from_id_salt("style")
+        .selected_text(STYLES.get(level.style as usize).copied().unwrap_or("?"))
+        .show_ui(ui, |ui| {
+            for (i, name) in STYLES.iter().enumerate() {
+                if ui
+                    .selectable_label(level.style == i as i32, *name)
+                    .clicked()
+                {
+                    ask(Setting::Style(i as i32));
+                }
+            }
+        });
+    ui.label("Background");
+    let background = BACKGROUNDS.iter().find(|(b, _)| *b == level.background);
+    egui::ComboBox::from_id_salt("background")
+        .selected_text(background.map_or("?", |(_, name)| name))
+        .show_ui(ui, |ui| {
+            for (b, name) in BACKGROUNDS {
+                if ui.selectable_label(level.background == b, name).clicked() {
+                    ask(Setting::Background(b));
+                }
+            }
+        });
+    ui.label("Music");
+    let track = level.music_track.unwrap_or(1);
+    egui::ComboBox::from_id_salt("music")
+        .selected_text(MUSIC.get((track - 1) as usize).copied().unwrap_or("?"))
+        .show_ui(ui, |ui| {
+            for (i, name) in MUSIC.iter().enumerate() {
+                if ui.selectable_label(track == i as i32 + 1, *name).clicked() {
+                    ask(Setting::Music(i as i32 + 1));
+                }
+            }
+        });
+    ui.separator();
+    let flags = [
+        (settings::SNOW, "Snow"),
+        (settings::RAIN, "Rain"),
+        (settings::LIGHTNING, "Lightning"),
+        (settings::FLASHES, "Colour flashes"),
+        (settings::HIDDEN_RAINBOW, "Hidden rainbow world"),
+    ];
+    for (code, label) in flags {
+        on_off(ui, studio, editor.flag(code), label, code);
+    }
+    let mut ask = |request| studio.request.push(Request::Setting(request));
+    let mut view3d = editor.view3d();
+    if ui.checkbox(&mut view3d, "3D view").changed() {
+        ask(Setting::View3d(view3d));
+    }
+    ui.label("Tint");
+    let tints: Vec<String> = TINTS.iter().map(|t| (*t).to_owned()).collect();
+    if let Some(tint) = optional_list(ui, "tint", editor.tint(), &tints) {
+        ask(Setting::Tint(tint));
+    }
+    ui.label("House style");
+    let houses: Vec<String> = (1..=HOUSE_STYLES).map(|n| n.to_string()).collect();
+    if let Some(style) = optional_list(ui, "houses", editor.house_style(), &houses) {
+        ask(Setting::HouseStyle(style));
+    }
+
+    ui.separator();
+    for (folder, names) in std::mem::take(&mut studio.folders) {
+        let (label, needs) = match folder {
+            Folder::Houses => ("Custom houses", None),
+            Folder::Models => ("Custom models", None),
+            Folder::Textures => ("Custom textures", Some(level.style == CUSTOM_STYLE)),
+            Folder::Backgrounds => (
+                "Custom background",
+                Some(level.background == CUSTOM_BACKGROUND),
+            ),
+        };
+        if needs == Some(false) || names.is_empty() {
+            studio.folders.push((folder, names));
+            continue;
+        }
+        ui.label(label);
+        let now = editor
+            .folder(folder)
+            .and_then(|d| names.iter().position(|n| n.eq_ignore_ascii_case(d)));
+        if let Some(picked) = optional_list(ui, label, now, &names) {
+            let dir = picked.map(|i| names[i].clone());
+            studio
+                .request
+                .push(Request::Setting(Setting::Folder(folder, dir)));
+        }
+        studio.folders.push((folder, names));
+    }
+
+    ui.separator();
+    ui.checkbox(&mut palette.hide_links, "Hide links");
+    if studio.warnings.is_empty() {
+        ui.label("No warnings");
+    } else {
+        ui.colored_label(WARNING, format!("{} warnings", studio.warnings.len()));
+    }
+    let mut go = None;
+    for warning in &studio.warnings {
+        match warning.cell {
+            Some(cell) => {
+                if ui.link(&warning.message).clicked() {
+                    go = Some(Request::GoTo(cell));
+                }
+            }
+            None => {
+                ui.label(&warning.message);
+            }
+        }
+    }
+    studio.request.extend(go);
 }
 
 fn tool_bar(ui: &mut egui::Ui, studio: &mut Studio, name: &str, dirty: bool) {
@@ -284,6 +558,12 @@ fn tool_bar(ui: &mut egui::Ui, studio: &mut Studio, name: &str, dirty: bool) {
         ask(ui, "Delete", "Del", Request::Delete);
         ui.separator();
         ask(ui, "Test Play", "F5, or F6 from the pointer", Request::Play);
+        ask(
+            ui,
+            "Turn",
+            "R: the brush or the piece selected",
+            Request::Turn,
+        );
         ask(ui, "Tilt", "T: the play camera", Request::Tilt);
         ask(ui, "Show All", "Home", Request::ShowAll);
         ui.separator();
@@ -338,21 +618,31 @@ fn palette_panel(
             *tool = Tool::Erase;
             palette.picked = None;
         }
+        if ui
+            .selectable_label(*tool == Tool::Link, "Link")
+            .on_hover_text("L: drag from a button to a gate, or between teleporters")
+            .clicked()
+        {
+            *tool = Tool::Link;
+            palette.picked = None;
+        }
     });
     ui.small("Right button erases, Shift drags a box");
     if let Some((piece, choices)) = &mut palette.picked {
+        // R may have turned the brush.
+        if let Tool::Brush(b) = studio.canvas.tool
+            && piece.contains(b.code)
+        {
+            *choices = piece.choices(b.code);
+        }
         ui.separator();
         ui.strong(piece.name);
-        for (i, axis) in piece.axes.iter().enumerate() {
-            egui::ComboBox::from_id_salt(axis.name)
-                .selected_text(axis.values[choices[i]])
-                .show_ui(ui, |ui| {
-                    for (v, value) in axis.values.iter().enumerate() {
-                        ui.selectable_value(&mut choices[i], v, *value);
-                    }
-                });
+        for (i, axis) in shown_axes(piece) {
+            ui.label(axis.name);
+            if axis_choice(ui, axis, &mut choices[i]) {
+                studio.canvas.tool = Tool::Brush(brush(piece, choices));
+            }
         }
-        studio.canvas.tool = Tool::Brush(brush(piece, choices));
     }
     for (group, title) in GROUPS {
         egui::CollapsingHeader::new(title)
@@ -454,7 +744,8 @@ fn canvas_marks(
                 (Layer::Object, level.object(x, y)),
                 (Layer::Tile, level.tile(x, y)),
             ] {
-                if needs_marker(layer, code)
+                let inside = (1..width - 1).contains(&x) && (1..height - 1).contains(&y);
+                if needs_marker(layer, code, inside)
                     && let Some(sprite) = catalogue::sprite(layer, code)
                     && let Some((id, uv)) = palette.icon(sprite, data, images, contexts)
                     && let Some(rect) = projection.cell_rect((x as isize, y as isize), 0.5)
@@ -462,6 +753,27 @@ fn canvas_marks(
                     painter.image(id, rect, uv, Color32::WHITE);
                 }
             }
+        }
+    }
+
+    let middle = |(x, y): (usize, usize)| projection.point(x as f32 + 0.5, y as f32 + 0.5);
+    let near = |(x, y): (usize, usize)| {
+        let cell = (x as isize, y as isize);
+        studio.hover == Some(cell) || studio.canvas.selection().is_some_and(|s| s.contains(cell))
+    };
+    for link in &studio.links {
+        let bright = near(link.from) || near(link.to);
+        if (bright || (!palette.hide_links && !link.conveyor))
+            && let (Some(a), Some(b)) = (middle(link.from), middle(link.to))
+        {
+            let colour = if bright { LINK } else { FAINT_LINK };
+            painter.line_segment([a, b], Stroke::new(if bright { 2.0 } else { 1.0 }, colour));
+        }
+    }
+    for warning in &studio.warnings {
+        if let Some((x, y)) = warning.cell {
+            let cell = (x as isize, y as isize);
+            projection.outline(painter, cell, (1, 1), Stroke::new(2.0, WARNING));
         }
     }
 
@@ -488,6 +800,12 @@ fn canvas_marks(
                     (to.0 - from.0, to.1 - from.1),
                     HOVER,
                 );
+            }
+        }
+        Some(Gesture::Link { from, to }) => {
+            let centre = |(x, y): Cell| projection.point(x as f32 + 0.5, y as f32 + 0.5);
+            if let (Some(a), Some(b)) = (centre(from), centre(to)) {
+                painter.line_segment([a, b], Stroke::new(2.0, LINK));
             }
         }
         Some(Gesture::Stroke { .. }) => {}

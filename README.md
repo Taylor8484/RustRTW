@@ -130,7 +130,7 @@ To work on the original Blitz3D code, see
 
 - Runs natively on modern Windows and Linux, with no Blitz3D or dgVoodoo.
 - Wide screens show more of the level at the sides.
-- The new level editor has no sign text, level settings or link drawing yet.
+- The new level editor cannot yet prove a level beatable or build level packs.
 - The online menu entries still point to the original game's web pages.
 
 ## Licence and credits

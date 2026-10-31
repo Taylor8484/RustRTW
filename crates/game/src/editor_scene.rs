@@ -22,7 +22,9 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use wonderland_campaign::custom;
-use wonderland_editor::canvas::{Brush, Canvas, Cell, Tool};
+use wonderland_editor::canvas::{Brush, Canvas, Cell, Tool, turned};
+use wonderland_editor::links::{Link, Spot, Warning, links, warnings};
+use wonderland_editor::settings::{Folder, Setting};
 use wonderland_editor::{Editor, level_name};
 use wonderland_formats::catalogue::{self, Group, Layer};
 use wonderland_formats::{Game, Level};
@@ -35,6 +37,7 @@ use crate::hud::{Screen, ScreenFilled};
 use crate::level::GameData;
 use crate::menu::MAIN;
 use crate::menu_scene::MenuState;
+use crate::music::{MusicRequest, extra_track};
 use crate::scene::{LitFace, spawn_level};
 use crate::sim::Sim;
 
@@ -127,6 +130,16 @@ pub enum Request {
     PlayFromCursor,
     Tilt,
     ShowAll,
+    /// Turns the brush, or the piece selected.
+    Turn,
+    /// Replaces the piece on a cell.
+    SetPiece(Spot, Brush),
+    Setting(Setting),
+    /// Changes a sign's text, staying pending until [`Request::Commit`].
+    SignText(usize, String),
+    Commit,
+    /// Brings a cell to the middle of the view.
+    GoTo(Spot),
     Leave(Leaving),
     /// [`Request::Leave`] with any changes given up.
     Discard(Leaving),
@@ -157,6 +170,12 @@ pub struct Studio {
     /// A text box has the keyboard.
     pub typing: bool,
     pub request: Vec<Request>,
+    /// What connects the level on show.
+    pub links: Vec<Link>,
+    /// What will not work in the level on show.
+    pub warnings: Vec<Warning>,
+    /// The art folders the game folder holds, by [`FOLDERS`].
+    pub folders: Vec<(Folder, Vec<String>)>,
     /// The [`Editor::revision`] on show.
     drawn: Option<u64>,
     /// The view fits the level on show.
@@ -181,6 +200,19 @@ fn levels_dir(data: &GameData) -> PathBuf {
     data.assets.dir().join(custom::FOLDER)
 }
 
+/// The folders under `dir`, by name.
+fn subfolders(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort_by_key(|n| n.to_ascii_uppercase());
+    names
+}
+
 /// The level files in `dir`, by name.
 fn level_files(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -193,6 +225,14 @@ fn level_files(dir: &Path) -> Vec<String> {
     names.sort_by_key(|n| n.to_ascii_uppercase());
     names
 }
+
+/// The folders a level can name.
+const FOLDERS: [Folder; 4] = [
+    Folder::Houses,
+    Folder::Models,
+    Folder::Textures,
+    Folder::Backgrounds,
+];
 
 /// A new map id. `SaveLevel` makes one from the clock on every save.
 fn new_map_id() -> i32 {
@@ -237,9 +277,20 @@ impl Plugin for EditorPlugin {
     }
 }
 
-fn clear_screen(mut screen: ResMut<Screen>) {
+fn clear_screen(
+    mut screen: ResMut<Screen>,
+    mut music: ResMut<MusicRequest>,
+    mut studio: ResMut<Studio>,
+    data: Res<GameData>,
+) {
     screen.images.clear();
     screen.letters.clear();
+    music.0 = Some(None);
+    let list = |&folder: &Folder| {
+        let dir = data.assets.resolve(folder.root());
+        (folder, dir.map(|d| subfolders(&d)).unwrap_or_default())
+    };
+    studio.folders = FOLDERS.iter().map(list).collect();
 }
 
 /// Back to what the play camera expects, and the next visit redraws.
@@ -390,6 +441,11 @@ fn editor_keys(
         Some(Request::PlayFromCursor)
     } else if tap(KeyCode::KeyT) && !ctrl {
         Some(Request::Tilt)
+    } else if tap(KeyCode::KeyR) && !ctrl {
+        Some(Request::Turn)
+    } else if tap(KeyCode::KeyL) && !ctrl {
+        studio.canvas.tool = Tool::Link;
+        None
     } else if tap(KeyCode::Home) {
         Some(Request::ShowAll)
     } else if tap(KeyCode::Delete) {
@@ -412,17 +468,21 @@ fn editor_keys(
     studio.request.extend(request);
 }
 
-/// Starts test play of `level`.
+/// Starts test play of `level`, with its music.
 fn play(
     commands: &mut Commands,
     data: &GameData,
     level: Level,
     now: i64,
     next: &mut NextState<Phase>,
+    music: &mut MusicRequest,
     status: &mut String,
 ) {
     match begin_memory(data, level, Session::default(), now) {
         Ok((level, sim)) => {
+            if let Some(track) = level.level.music_track {
+                music.0 = Some(Some(extra_track(track)));
+            }
             commands.insert_resource(level);
             commands.insert_resource(sim);
             next.set(Phase::Game);
@@ -455,9 +515,11 @@ fn carry_out(
     data: Res<GameData>,
     mut menu: ResMut<MenuState>,
     mut next: ResMut<NextState<Phase>>,
+    mut music: ResMut<MusicRequest>,
     time: Res<Time<Real>>,
 ) {
     let studio = &mut *studio;
+    let music = &mut *music;
     let now = time.elapsed().as_millis() as i64;
     for request in std::mem::take(&mut studio.request) {
         let editor = &mut editing.0;
@@ -491,6 +553,7 @@ fn carry_out(
                     level,
                     now,
                     &mut next,
+                    music,
                     &mut studio.status,
                 );
             }
@@ -514,10 +577,33 @@ fn carry_out(
                     level,
                     now,
                     &mut next,
+                    music,
                     &mut studio.status,
                 );
             }
             Request::Tilt => studio.view.tilted = !studio.view.tilted,
+            Request::Turn => {
+                if let Tool::Brush(brush) = studio.canvas.tool {
+                    studio.canvas.tool = Tool::Brush(turned(brush));
+                } else if let Some(block) = studio.canvas.selection()
+                    && (block.width, block.height) == (1, 1)
+                {
+                    let (layer, code) = editor.top(block.x, block.y);
+                    let brush = turned(Brush { layer, code });
+                    editor.place(block.x, block.y, layer, brush.code);
+                    editor.commit();
+                }
+            }
+            Request::SetPiece((x, y), brush) => {
+                editor.place(x, y, brush.layer, brush.code);
+                editor.commit();
+            }
+            Request::Setting(setting) => editor.apply(setting),
+            Request::SignText(slot, text) => editor.set_sign_text(slot, &text),
+            Request::Commit => editor.commit(),
+            Request::GoTo((x, y)) => {
+                studio.view.centre = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+            }
             Request::ShowAll => studio.fitted = false,
             Request::Leave(then) if editor.is_dirty() => studio.dialog = Dialog::Unsaved(then),
             Request::Leave(then) | Request::Discard(then) => {
@@ -603,6 +689,8 @@ fn follow_level(
         return;
     }
     studio.drawn = Some(editor.revision());
+    studio.links = links(editor.level());
+    studio.warnings = warnings(editor.level());
     let now = time.elapsed().as_millis() as i64;
     match begin_memory(&data, editor.playable(), Session::default(), now) {
         Ok((level, mut sim)) => {
@@ -721,6 +809,7 @@ mod tests {
             .add_message::<MouseMotion>()
             .init_resource::<Pad>()
             .init_resource::<MenuSounds>()
+            .init_resource::<MusicRequest>()
             .init_resource::<Screen>()
             .init_resource::<TextureCache>()
             .init_resource::<Editing>()
@@ -857,6 +946,57 @@ mod tests {
         tap(&mut app, KeyCode::F5);
         let sim = app.world().resource::<Sim>();
         assert!(sim.world.players.iter().any(|p| p.exists && !p.hidden));
+    }
+
+    #[test]
+    fn r_turns_the_brush_or_the_piece_selected() {
+        let Some(data) = real_data() else {
+            return;
+        };
+        let mut app = app(data);
+        let cannon = Brush {
+            layer: Layer::Tile,
+            code: 800,
+        };
+        app.world_mut().resource_mut::<Studio>().canvas.tool = Tool::Brush(cannon);
+        tap(&mut app, KeyCode::KeyR);
+        let tool = app.world().resource::<Studio>().canvas.tool;
+        assert_eq!(
+            tool,
+            Tool::Brush(Brush {
+                code: 804,
+                ..cannon
+            })
+        );
+
+        drag(&mut app, (3, 3), (3, 3));
+        app.world_mut().resource_mut::<Studio>().canvas.tool = Tool::Select;
+        drag(&mut app, (3, 3), (3, 3));
+        tap(&mut app, KeyCode::KeyR);
+        let tile = app.world().resource::<Editing>().0.level().tile(3, 3);
+        assert_eq!(tile, 808);
+    }
+
+    #[test]
+    fn warnings_and_links_follow_the_level_and_test_play_starts_its_music() {
+        let Some(data) = real_data() else {
+            return;
+        };
+        let mut app = app(data);
+        let mut editing = app.world_mut().resource_mut::<Editing>();
+        editing.0.place(2, 2, Layer::Tile, 1200);
+        editing.0.place(4, 2, Layer::Tile, 1200);
+        editing.0.commit();
+        app.update();
+        let studio = app.world().resource::<Studio>();
+        assert_eq!(studio.links.len(), 1);
+        assert!(studio.warnings.iter().any(|w| w.message.contains("exit")));
+        app.world_mut().resource_mut::<MusicRequest>().0 = None;
+        tap(&mut app, KeyCode::F5);
+        assert!(matches!(
+            app.world().resource::<MusicRequest>().0,
+            Some(Some(_))
+        ));
     }
 
     #[test]

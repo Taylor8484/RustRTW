@@ -11,6 +11,9 @@
 //! [`canvas`] turns pointer gestures into these edits.
 
 pub mod canvas;
+pub mod links;
+pub mod settings;
+pub mod signs;
 
 use std::mem;
 
