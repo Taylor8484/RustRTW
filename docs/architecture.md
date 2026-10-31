@@ -180,7 +180,8 @@ pinned and upgraded deliberately.
   `<dir>/TOW` when it is there; `--level` looks in TOW's pack for a
   name RTWP's lacks.
 - **TOW as content:** a TOW level file is parsed as TOW reads it (v1,
-  no map id), then set up and played under RTWP's rules
+  no map id), then set up and played under `Ruleset::tow()`, RTWP's rules with
+  the differences that change a TOW level (`docs/diff-tow.md`)
   (`GameData::load_content_level`). TOW's bonus levels came as a
   separate download, so a TOW level missing from `levels\` is also
   looked for in the TOW folder itself. TOW's levels use RTWP's models,

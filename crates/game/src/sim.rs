@@ -38,7 +38,7 @@ impl Sim {
         session: Session,
         now_ms: i64,
     ) -> Result<Self, String> {
-        let world = World::start(&level.level, data.ruleset.clone(), data.options, session)
+        let world = World::start(&level.level, level.ruleset.clone(), data.options, session)
             .map_err(|e| format!("{}: {e}", level.name))?;
         let events = world.events().to_vec();
         Ok(Self {

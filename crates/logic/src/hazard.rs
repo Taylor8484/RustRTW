@@ -233,12 +233,12 @@ impl World {
         });
     }
 
-    /// `ControlCannons`: a cannon waits while 25 fireballs are out.
+    /// `ControlCannons`: a cannon waits while too many fireballs are out.
     pub(crate) fn control_cannons(&mut self) {
         for i in 0..self.cannons.len() {
             self.cannons[i].timer -= 1;
             let c = self.cannons[i].clone();
-            if c.timer <= 0 && self.fireball_count < 25 {
+            if c.timer <= 0 && self.fireball_count < self.ruleset.cannon_fireball_limit {
                 self.play_single_sound(c.x, c.y, 1);
                 self.create_fireball(c.x + c.dx, c.y + c.dy, c.dx, c.dy);
                 self.cannons[i].timer = (c.speed + 1) * cannon_base(self);
@@ -553,6 +553,23 @@ mod tests {
         assert_eq!(fired, Some((c.speed + 1) * 120));
         assert!(w.players[1].dying);
         assert_eq!((c.dx, c.dy), (1, 0));
+    }
+
+    #[test]
+    fn only_rtwp_holds_cannons_back_at_25_fireballs() {
+        let shots = |ruleset: Ruleset| {
+            let tiles = [100, 804, 100, 100, 100, 100];
+            let l = level(5, 3, &tiles, &[0, 0, 1, 0, 0, 0]);
+            let mut w = World::start(&l, ruleset, Options::default(), Session::default()).unwrap();
+            for _ in 0..25 {
+                w.create_fireball(0, 0, 0, 1);
+            }
+            w.cannons[0].timer = 1;
+            w.control_cannons();
+            w.fireball_count()
+        };
+        assert_eq!(shots(Ruleset::rtwp()), 25);
+        assert_eq!(shots(Ruleset::tow()), 26);
     }
 
     #[test]

@@ -127,16 +127,21 @@ impl GameData {
     }
 
     /// Loads a level from `content`'s folder, parsed as that game reads
-    /// it, then set up under RTWP's rules.
+    /// it, then set up under `content`'s rules.
     pub fn load_content_level(&self, content: Content, name: &str) -> Result<LevelData, String> {
         let data = self.read_level(content, name)?;
         let level = Level::parse(&data, content.game()).map_err(|e| format!("{name}: {e}"))?;
-        let setup = Setup::load(&level, &self.ruleset, self.options.load)
-            .map_err(|e| format!("{name}: {e}"))?;
+        let ruleset = match content {
+            Content::Rtwp => Ruleset::rtwp(),
+            Content::Tow => Ruleset::tow(),
+        };
+        let setup =
+            Setup::load(&level, &ruleset, self.options.load).map_err(|e| format!("{name}: {e}"))?;
         Ok(LevelData {
             name: name.to_owned(),
             level,
             setup,
+            ruleset,
         })
     }
 }
@@ -148,6 +153,7 @@ pub struct LevelData {
     pub name: String,
     pub level: Level,
     pub setup: Setup,
+    pub ruleset: Ruleset,
 }
 
 /// Every `.lev`/`.lv5` file in the pack.
