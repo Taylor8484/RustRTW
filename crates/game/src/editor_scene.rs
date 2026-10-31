@@ -42,9 +42,10 @@ use crate::coords::rotation;
 use crate::editor_check::{
     Answers, PackLine, PackProof, Proof, check_pack, pack_lines, read_level, read_solution,
 };
+use crate::editor_icons::Icons;
 use crate::flow::{Phase, begin_memory};
 use crate::hud::{Screen, ScreenFilled};
-use crate::level::GameData;
+use crate::level::{GameData, LevelData};
 use crate::menu::MAIN;
 use crate::menu_scene::MenuState;
 use crate::music::{MusicRequest, extra_track};
@@ -140,6 +141,8 @@ pub enum Dialog {
         name: String,
         lines: Vec<PackLine>,
     },
+    /// The pieces at a size to see, by palette group.
+    Pieces(Group),
 }
 
 /// What the panels or the keys ask for.
@@ -185,6 +188,7 @@ pub enum Request {
         replace: bool,
     },
     PickStamp(String),
+    ShowPieces,
     ListPacks,
     NewPack(String),
     OpenPack(String),
@@ -213,6 +217,10 @@ pub struct Studio {
     pub status: String,
     /// A text box has the keyboard.
     pub typing: bool,
+    /// The pointer is over a popup or list, which has the clicks.
+    pub over_window: bool,
+    /// The palette's pictures are being made, and the level is not on show.
+    pub busy: bool,
     pub request: Vec<Request>,
     /// What connects the level on show.
     pub links: Vec<Link>,
@@ -237,9 +245,16 @@ pub struct Studio {
 }
 
 impl Studio {
+    /// Has the level on show drawn again.
+    pub fn redraw(&mut self) {
+        self.drawn = None;
+    }
+
     /// Whether the pointer is over the canvas, with no dialog in the way.
     pub fn on_canvas(&self) -> bool {
         self.dialog == Dialog::None
+            && !self.over_window
+            && !self.busy
             && match (self.pointer, self.canvas_area) {
                 (Some(p), Some(area)) => area.contains(p),
                 // Nothing drawn yet: no panels either.
@@ -362,6 +377,10 @@ fn write_solution(dir: &Path, name: &str, solution: Option<&Solution>) -> Result
     done.map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// The editor's systems that follow the level on show.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EditorSteps;
+
 pub struct EditorPlugin;
 
 impl Plugin for EditorPlugin {
@@ -381,6 +400,7 @@ impl Plugin for EditorPlugin {
                     place_camera,
                 )
                     .chain()
+                    .in_set(EditorSteps)
                     .before(ScreenFilled)
                     .distributive_run_if(resource_exists::<Editing>)
                     .run_if(in_state(Phase::Editor)),
@@ -588,6 +608,8 @@ fn editor_keys(
         Some(Request::Tilt)
     } else if tap(KeyCode::KeyR) && !ctrl {
         Some(Request::Turn)
+    } else if tap(KeyCode::KeyP) && !ctrl {
+        Some(Request::ShowPieces)
     } else if tap(KeyCode::KeyL) && !ctrl {
         studio.canvas.tool = Tool::Link;
         None
@@ -726,6 +748,9 @@ fn carry_out(
     let studio = &mut *studio;
     let music = &mut *music;
     let now = time.elapsed().as_millis() as i64;
+    if studio.busy {
+        studio.request.clear();
+    }
     for request in std::mem::take(&mut studio.request) {
         let editor = &mut editing.0;
         match request {
@@ -932,6 +957,7 @@ fn carry_out(
                 }
                 Err(e) => studio.status = e,
             },
+            Request::ShowPieces => studio.dialog = Dialog::Pieces(Group::Character),
             Request::ListPacks => {
                 let dir = levels_dir(&data);
                 studio.pack_check = None;
@@ -1022,6 +1048,28 @@ fn follow_proof(editing: Res<Editing>, data: Res<GameData>, mut studio: ResMut<S
     }
 }
 
+/// A level fades in from dark, and one on show here never ticks.
+fn full_light(sim: &mut Sim) {
+    let lights = &mut sim.world.lights;
+    lights.light = lights.light_target;
+    lights.ambient = lights.ambient_target;
+}
+
+/// Starts the stage [`crate::editor_icons`] photographs.
+pub fn begin_stage(data: &GameData, level: Level) -> Result<(LevelData, Sim), String> {
+    let (mut level, mut sim) = begin_memory(data, level, 0)?;
+    full_light(&mut sim);
+    // A monster on a tile leaves floor behind, which is not part of it.
+    let grid = &mut level.setup.grid;
+    for (x, y) in grid.cells() {
+        let code = level.level.tile(x as usize, y as usize);
+        if catalogue::find(Layer::Tile, code).is_some_and(|p| p.group == Group::Monster) {
+            grid.set(x, y, 0);
+        }
+    }
+    Ok((level, sim))
+}
+
 /// Shows the level as it now stands, if it has changed.
 fn follow_level(
     mut commands: Commands,
@@ -1030,7 +1078,11 @@ fn follow_level(
     data: Res<GameData>,
     time: Res<Time<Real>>,
     faces: Query<Entity, With<LitFace>>,
+    icons: Option<Res<Icons>>,
 ) {
+    if icons.is_some_and(|i| i.staging()) {
+        return;
+    }
     let editor = &editing.0;
     if !studio.fitted {
         studio.fitted = true;
@@ -1047,10 +1099,7 @@ fn follow_level(
     let now = time.elapsed().as_millis() as i64;
     match begin_memory(&data, editor.playable(), now) {
         Ok((level, mut sim)) => {
-            // A level fades in from dark, and this one never ticks.
-            let lights = &mut sim.world.lights;
-            lights.light = lights.light_target;
-            lights.ambient = lights.ambient_target;
+            full_light(&mut sim);
             // The Stinky tidying adds is not there to see or to drag.
             if !editor.has_character() {
                 sim.world.players.iter_mut().for_each(|p| p.hidden = true);
@@ -1123,7 +1172,6 @@ mod tests {
     use crate::audio::MenuSounds;
     use crate::flow::FlowPlugin;
     use crate::game_menu::GameMenu;
-    use crate::level::LevelData;
     use crate::menu::Menu;
     use crate::pad::Pad;
     use crate::scene::TextureCache;
@@ -1286,6 +1334,34 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the check did not finish");
+    }
+
+    #[test]
+    fn a_click_on_a_popup_does_not_reach_the_canvas() {
+        let Some(data) = temp_data("popup") else {
+            return;
+        };
+        let mut app = app(data);
+        corridor(&mut app);
+        // The player is selected, and its popup covers the cell beside it.
+        drag(&mut app, (2, 5), (2, 5));
+        let selected = app.world().resource::<Studio>().canvas.selection();
+        assert!(selected.is_some());
+        app.world_mut().resource_mut::<Studio>().over_window = true;
+        drag(&mut app, (3, 5), (3, 5));
+        assert_eq!(
+            app.world().resource::<Studio>().canvas.selection(),
+            selected
+        );
+
+        // What the popup asks for then happens: Stinky becomes Loof.
+        let loof = Brush {
+            layer: Layer::Object,
+            code: 2,
+        };
+        request(&mut app, Request::SetPiece((2, 5), loof));
+        let editing = app.world().resource::<Editing>();
+        assert_eq!(editing.0.level().object(2, 5), 2);
     }
 
     #[test]

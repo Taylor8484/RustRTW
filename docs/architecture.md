@@ -327,7 +327,11 @@ pinned and upgraded deliberately.
   above onto the canvas; it changes nothing itself, but asks through
   `Studio::request`, as the keys do. Clicking a piece opens a popup with its
   choices and a sign's text, and a panel holds the level's settings and
-  warnings. Saves go to `CustomLevels/<NAME>.LV6`, or the pack the level is in.
+  warnings. The palette's icons are the real pieces: game art cannot ship with
+  the source, so `editor_icons` makes them on the first visit, photographing
+  `editor::stage`, a level with one of each piece, with a second camera, and
+  cutting each out of the picture into a sheet. The Pieces window (P) shows
+  the same entries bigger. Saves go to `CustomLevels/<NAME>.LV6`, or the pack the level is in.
   A win of a test play from the start becomes the level's solution, and
   `editor_check` checks it on a thread of its own after each edit, one check at
   a time, and a pack's levels in turn for the pack dialog. A pack

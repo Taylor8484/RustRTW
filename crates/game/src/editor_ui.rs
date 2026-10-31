@@ -1,6 +1,7 @@
 //! The editor's panels and the marks over the canvas, in egui.
 //!
-//! The tool bar, the palette and a status line surround the canvas. What is
+//! The tool bar, the palette and a status line surround the canvas, and the
+//! Pieces window shows the palette at a size to see. What is
 //! left is [`Studio::canvas_area`], and everything drawn there is projected
 //! from the level, so it stays right when the camera tilts: the cell grid,
 //! the pointer's cell, the selection and sprites for the pieces that cannot
@@ -23,19 +24,23 @@ use wonderland_editor::settings::{
     Setting, TINTS,
 };
 use wonderland_editor::signs::{sign_lines, stored_sign};
+use wonderland_editor::stage::{Entry, entries_of, expanded};
 use wonderland_formats::catalogue::{self, Axis, Group, Layer, PIECES, Piece, Sprite};
 use wonderland_logic::Ruleset;
 
 use crate::camera::GameCamera;
 use crate::editor_check::PackProof;
+use crate::editor_icons::{EditorIconsPlugin, Icons};
 use crate::editor_scene::{Dialog, Editing, Leaving, Request, Studio};
 use crate::flow::Phase;
 use crate::level::GameData;
 use crate::texture;
 
 /// A palette sprite's size.
-const ICON: f32 = 32.0;
-const GROUPS: [(Group, &str); 9] = [
+const ICON: f32 = 40.0;
+/// The Pieces window's size for them.
+const BIG_ICON: f32 = 96.0;
+const GROUPS: [(Group, &str); 10] = [
     (Group::Ground, "Ground"),
     (Group::Wall, "Walls"),
     (Group::Item, "Items"),
@@ -44,6 +49,7 @@ const GROUPS: [(Group, &str); 9] = [
     (Group::Monster, "Monsters"),
     (Group::Hazard, "Hazards"),
     (Group::Switch, "Switches"),
+    (Group::Sign, "Signs"),
     (Group::Scenery, "Scenery"),
 ];
 const GRID: Color32 = Color32::from_rgba_premultiplied(30, 30, 30, 30);
@@ -85,6 +91,8 @@ struct Palette {
     sheets: HashMap<&'static str, Option<Sheet>>,
     picked: Option<(&'static Piece, Vec<usize>)>,
     hide_links: bool,
+    /// The picture of every piece, once it is made.
+    pictures: Option<TextureId>,
 }
 
 impl Palette {
@@ -109,6 +117,33 @@ impl Palette {
         });
         sheet.as_ref().map(|s| (s.id, s.uv(sprite.frame)))
     }
+}
+
+/// What draws an entry in the palette: its picture from the game, or else
+/// its sprite from the original editor.
+fn entry_icon(
+    entry: &Entry,
+    palette: &mut Palette,
+    icons: &Icons,
+    data: &GameData,
+    images: &mut Assets<Image>,
+    contexts: &mut EguiContexts,
+) -> Option<(TextureId, EguiRect)> {
+    if let (Some(rect), Some(image)) = (
+        icons.get(entry.piece.layer, entry.code()),
+        icons.image.as_ref(),
+    ) {
+        let id = *palette
+            .pictures
+            .get_or_insert_with(|| contexts.add_image(EguiTextureHandle::Strong(image.clone())));
+        let uv = EguiRect::from_min_max(
+            egui::pos2(rect.min[0], rect.min[1]),
+            egui::pos2(rect.max[0], rect.max[1]),
+        );
+        return Some((id, uv));
+    }
+    let sprite = catalogue::sprite(entry.piece.layer, entry.code())?;
+    palette.icon(sprite, data, images, contexts)
 }
 
 /// The choices a person makes: a sign's slot is handed out for them.
@@ -159,6 +194,7 @@ pub struct EditorUiPlugin;
 
 impl Plugin for EditorUiPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(EditorIconsPlugin);
         app.init_resource::<Palette>().add_systems(
             EguiPrimaryContextPass,
             panels.run_if(in_state(Phase::Editor)),
@@ -237,6 +273,7 @@ fn panels(
     mut studio: ResMut<Studio>,
     editing: Option<Res<Editing>>,
     data: Res<GameData>,
+    icons: Res<Icons>,
     mut images: ResMut<Assets<Image>>,
     camera: Query<(&Camera, &GlobalTransform), With<GameCamera>>,
 ) {
@@ -276,7 +313,15 @@ fn panels(
         .default_size(190.0)
         .show(&mut root, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                palette_panel(ui, palette, studio, &data, &mut images, &mut contexts);
+                palette_panel(
+                    ui,
+                    palette,
+                    studio,
+                    &icons,
+                    &data,
+                    &mut images,
+                    &mut contexts,
+                );
             });
         });
 
@@ -285,6 +330,10 @@ fn panels(
         area.min.x, area.min.y, area.max.x, area.max.y,
     ));
     studio.typing = ctx.egui_wants_keyboard_input();
+    studio.over_window = studio.pointer.is_some_and(|p| {
+        ctx.layer_id_at(egui::pos2(p.x, p.y))
+            .is_some_and(|layer| layer.order != egui::Order::Background)
+    });
 
     if let Ok((camera, transform)) = camera.single() {
         let projection = Projection { camera, transform };
@@ -314,6 +363,15 @@ fn panels(
         let projection = Projection { camera, transform };
         popup(&ctx, &projection, studio, &editing);
     }
+    pieces_window(
+        &ctx,
+        palette,
+        studio,
+        &icons,
+        &data,
+        &mut images,
+        &mut contexts,
+    );
     dialogs(&ctx, studio, editing.0.is_dirty());
 }
 
@@ -614,6 +672,8 @@ fn tool_bar(ui: &mut egui::Ui, studio: &mut Studio, name: &str, dirty: bool) {
         ask(ui, "Save", "Ctrl+S", Request::AskToSave);
         ask(ui, "Packs", "Level packs", Request::ListPacks);
         ui.separator();
+        ask(ui, "Pieces", "P: every piece, bigger", Request::ShowPieces);
+        ui.separator();
         ask(ui, "Undo", "Ctrl+Z", Request::Undo);
         ask(ui, "Redo", "Ctrl+Y", Request::Redo);
         ui.separator();
@@ -668,6 +728,7 @@ fn palette_panel(
     ui: &mut egui::Ui,
     palette: &mut Palette,
     studio: &mut Studio,
+    icons: &Icons,
     data: &GameData,
     images: &mut Assets<Image>,
     contexts: &mut EguiContexts,
@@ -708,7 +769,7 @@ fn palette_panel(
         }
         ui.separator();
         ui.strong(piece.name);
-        for (i, axis) in shown_axes(piece) {
+        for (i, axis) in shown_axes(piece).filter(|(_, a)| !expanded(a.name)) {
             ui.label(axis.name);
             if axis_choice(ui, axis, &mut choices[i]) {
                 studio.canvas.tool = Tool::Brush(brush(piece, choices));
@@ -730,42 +791,111 @@ fn palette_panel(
             .default_open(group == Group::Ground)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    for piece in PIECES.iter().filter(|p| p.group == group) {
-                        palette_item(ui, piece, palette, studio, data, images, contexts);
+                    for entry in group_entries(group) {
+                        palette_item(
+                            ui, &entry, ICON, palette, studio, icons, data, images, contexts,
+                        );
                     }
                 });
             });
     }
 }
 
-fn palette_item(
-    ui: &mut egui::Ui,
-    piece: &'static Piece,
+/// The palette's entries for `group`.
+fn group_entries(group: Group) -> impl Iterator<Item = Entry> {
+    PIECES
+        .iter()
+        .filter(move |p| p.group == group)
+        .flat_map(entries_of)
+}
+
+/// The Pieces window: one group at a time, like the palette but bigger.
+fn pieces_window(
+    ctx: &egui::Context,
     palette: &mut Palette,
     studio: &mut Studio,
+    icons: &Icons,
     data: &GameData,
     images: &mut Assets<Image>,
     contexts: &mut EguiContexts,
 ) {
-    let zeroes = vec![0; piece.axes.len()];
-    let picked = palette
-        .picked
-        .as_ref()
-        .is_some_and(|(p, _)| std::ptr::eq(*p, piece));
+    let Dialog::Pieces(mut shown) = studio.dialog else {
+        return;
+    };
+    let mut close = false;
+    egui::Window::new("Pieces")
+        .collapsible(false)
+        .resizable(false)
+        .default_width(700.0)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (group, title) in GROUPS {
+                    ui.selectable_value(&mut shown, group, title);
+                }
+            });
+            ui.separator();
+            let tool = studio.canvas.tool;
+            egui::ScrollArea::vertical()
+                .max_height(440.0)
+                .show(ui, |ui| {
+                    ui.set_width(680.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for entry in group_entries(shown) {
+                            palette_item(
+                                ui, &entry, BIG_ICON, palette, studio, icons, data, images,
+                                contexts,
+                            );
+                        }
+                    });
+                });
+            ui.separator();
+            close = ui.button("Cancel").clicked() || studio.canvas.tool != tool;
+        });
+    studio.dialog = if close || studio.carrying.is_some() {
+        Dialog::None
+    } else {
+        Dialog::Pieces(shown)
+    };
+}
+
+#[allow(clippy::too_many_arguments)]
+fn palette_item(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    size: f32,
+    palette: &mut Palette,
+    studio: &mut Studio,
+    icons: &Icons,
+    data: &GameData,
+    images: &mut Assets<Image>,
+    contexts: &mut EguiContexts,
+) {
+    let piece = entry.piece;
+    // The entry's own choices, or those made since it was picked.
+    let own = |(p, c): &(&'static Piece, Vec<usize>)| {
+        std::ptr::eq(*p, piece)
+            && piece
+                .axes
+                .iter()
+                .enumerate()
+                .all(|(i, a)| !expanded(a.name) || c[i] == entry.choices[i])
+    };
+    let picked = palette.picked.as_ref().is_some_and(own);
     let choices = palette
         .picked
         .as_ref()
         .filter(|_| picked)
-        .map_or(zeroes.clone(), |(_, c)| c.clone());
+        .map_or(entry.choices.clone(), |(_, c)| c.clone());
     let piece_brush = brush(piece, &choices);
-    let sprite = catalogue::sprite(piece.layer, piece_brush.code);
-    let icon = sprite.and_then(|s| palette.icon(s, data, images, contexts));
+    let icon = entry_icon(entry, palette, icons, data, images, contexts);
+    let name = entry.name();
     let response = match icon {
-        Some((id, uv)) => egui::Image::new(SizedTexture::new(id, EguiVec::splat(ICON)))
+        Some((id, uv)) => egui::Image::new(SizedTexture::new(id, EguiVec::splat(size)))
             .uv(uv)
             .sense(Sense::click_and_drag())
             .ui(ui),
-        None => ui.add(egui::Button::new(piece.name).sense(Sense::click_and_drag())),
+        None => ui.add(egui::Button::new(name.as_str()).sense(Sense::click_and_drag())),
     };
     if picked {
         ui.painter().rect_stroke(
@@ -782,7 +912,7 @@ fn palette_item(
     if response.drag_started() {
         studio.carrying = Some(piece_brush);
     }
-    response.on_hover_text(piece.name);
+    response.on_hover_text(name);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -936,7 +1066,7 @@ fn dialogs(ctx: &egui::Context, studio: &mut Studio, dirty: bool) {
     let mut ask = None;
     let mut close = false;
     match &mut studio.dialog {
-        Dialog::None => {}
+        Dialog::None | Dialog::Pieces(_) => {}
         Dialog::Save {
             name,
             title,

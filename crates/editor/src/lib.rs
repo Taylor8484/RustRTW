@@ -17,6 +17,7 @@ pub mod proof;
 mod reader;
 pub mod settings;
 pub mod signs;
+pub mod stage;
 pub mod stamp;
 
 use std::mem;

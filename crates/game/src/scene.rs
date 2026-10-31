@@ -13,6 +13,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use crate::coords::{triangle, vec};
+use crate::editor_icons::Icons;
 use crate::flow::level_shown;
 use crate::level::{GameData, LevelData};
 use crate::level_mesh::{Quad, Tex, construct_background, construct_level};
@@ -230,6 +231,7 @@ pub fn spawn_level(
     data: Res<GameData>,
     level: Res<LevelData>,
     models: Option<ResMut<Models>>,
+    icons: Option<Res<Icons>>,
 ) {
     if let Some(mut models) = models {
         models.set_level(&level.level, &data.assets);
@@ -251,7 +253,19 @@ pub fn spawn_level(
         &data.assets,
     );
 
-    for s in construct_level(&setup.grid, background) {
+    let staging = icons.is_some_and(|i| i.staging());
+    for mut s in construct_level(&setup.grid, background) {
+        // A tile's sides and the bottom of a pool would cross the pieces below.
+        if staging {
+            s.quads.retain(|q| {
+                let ys = q.positions.map(|p| p[1]);
+                let (low, high) = (
+                    ys.iter().copied().fold(f32::MAX, f32::min),
+                    ys.iter().copied().fold(f32::MIN, f32::max),
+                );
+                high > 0.01 || (high - low < 0.01 && high > -0.3)
+            });
+        }
         spawn_surface(
             &mut commands,
             &mut meshes,
@@ -266,6 +280,10 @@ pub fn spawn_level(
         );
     }
 
+    // The palette's pictures have the pieces alone.
+    if staging {
+        return;
+    }
     let (width, height) = (setup.grid.width(), setup.grid.height());
     let bg = construct_background(background, style, width, height);
     for s in &bg.surfaces {
@@ -379,9 +397,12 @@ pub fn uv_transform(position: [f32; 2], rotation: i32) -> Affine2 {
 fn animate_uvs(
     anim: Res<TickAnim>,
     faces: Query<(&UvAnim, &MeshMaterial3d<StandardMaterial>)>,
+    new: Query<(), Added<UvAnim>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if !anim.is_changed() {
+    // A new surface needs its rotation even with the clock stopped, as in the
+    // editor.
+    if !anim.is_changed() && new.is_empty() {
         return;
     }
     for (a, handle) in &faces {
