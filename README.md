@@ -121,7 +121,6 @@ tools/package-release.sh linux    # or: windows
 | `data` | World and level tables |
 | `docs` | [Architecture](docs/architecture.md) and the [TOW comparison](docs/diff-tow.md) |
 | `tools` | Asset import and release packaging |
-| `RTWP`, `TOW`, `WSW` | The original Blitz3D source, kept as the reference |
 
 To work on the original Blitz3D code, see
 [OpenRTW](https://github.com/The-Wonderland-Team/OpenRTW).

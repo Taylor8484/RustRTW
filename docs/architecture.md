@@ -7,9 +7,6 @@ the Return to Wonderland Platinum engine playing both RTWP's and The Original
 Wonderland's levels, with TOW as content under RTWP's rules and no game
 selector. Wonderland Secret Worlds (world map, story screens) follows v1.
 
-The original Blitz3D sources (`TOW/`, `RTWP/`, `WSW/`) stay in the repo as the
-reference implementation until the port reaches parity.
-
 ## The original code
 
 The three games are forks of one engine, copied per game and edited

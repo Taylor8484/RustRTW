@@ -4,6 +4,11 @@
 # Blitz3D v1.83 toolchain (third-party; install locally to build the original games)
 /Blitz3D v1.83/
 
+# Original Blitz3D sources (kept locally for development)
+/RTWP/
+/TOW/
+/WSW/
+
 # Rust build output
 /target/
 
