@@ -31,9 +31,7 @@ Original Wonderland run under Return to Wonderland's rules, with TOW's own
 behaviour kept where it changes how a level plays. See
 [docs/diff-tow.md](docs/diff-tow.md).
 
-A new level editor is being developed: choose Level Editor on the main menu to
-try it. It saves to `CustomLevels` in the format the original game reads, and
-the original editor can still make everything it cannot yet.
+A new level editor is in testing. See [Level editor](#level-editor).
 
 ## Playing
 
@@ -80,6 +78,56 @@ and the secret song stay on the keyboard.
 | `--backend dx12\|vulkan\|gl` | Choose the graphics API |
 | `--assets <folder>` | Use another game data folder |
 | `--level <name>` | Start straight in a level |
+
+## Level editor
+
+The level editor builds on the community's long tradition of level making, with
+a focus on keeping your attention on the puzzle. It shows your level exactly as
+it will look in the game, drawn by the game's own renderer. Tilt to the play
+camera at any moment to see what the player will see.
+
+- **Direct, visual building:** drag real pieces from the palette, paint ground
+  in a single stroke, and move, copy and paste whole sections. Every change can
+  be undone.
+- **Settings in plain terms:** direction, speed and colour are choices on a
+  single piece. Weather, tint and house style are level settings, and sign text
+  slots are handled for you.
+- **Room to grow:** place a piece past the outer wall and the level expands to
+  fit it, up to 99 cells a side.
+- **Visible connections:** draw links from buttons to gates and between
+  teleporters, and see at a glance how a level is wired.
+- **Problems caught early:** the editor flags a missing exit, unpaired
+  teleporters, buttons and gates with no partner, empty signs and the game's
+  limits on boxes, monsters and signs.
+- **Instant test play:** jump into your level from the start or from the
+  pointer, with no need to save first, and return straight to where you left
+  off.
+- **Proven beatable:** win a test play from the start and your moves become the
+  level's solution. The editor replays that solution after every edit and shows
+  exactly where a change broke it, so a level stays solvable as you refine it.
+- **Reusable stamps:** save a favourite section once and place it in any level.
+- **Level packs:** gather levels into a pack, set their order and check that
+  each one can still be beaten.
+
+Levels are saved to `CustomLevels` in the original game's level format, and
+solutions are kept beside them as separate `.WIN` files. The editor is still
+being tested, so keep copies of levels you care about.
+
+| Key | Action |
+|---|---|
+| Arrow keys | Move the view |
+| Home | Show the whole level |
+| T | Tilt to the play camera |
+| R | Turn the selection |
+| P | Show every piece, bigger |
+| L | Link tool |
+| F5 | Test play from the start |
+| F6 | Test play from the pointer |
+| Delete | Delete the selection |
+| Ctrl+C, X, V | Copy, cut, paste |
+| Ctrl+Z, Y | Undo, redo |
+| Ctrl+S | Save |
+| Esc | Step back, then leave the editor |
 
 ## Building from source
 
