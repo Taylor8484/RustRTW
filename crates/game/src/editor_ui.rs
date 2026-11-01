@@ -4,9 +4,9 @@
 //! Pieces window shows the palette at a size to see. What is
 //! left is [`Studio::canvas_area`], and everything drawn there is projected
 //! from the level, so it stays right when the camera tilts: the cell grid,
-//! the pointer's cell, the selection and sprites for the pieces that cannot
-//! be seen from above, the links and the warnings. The sprites are the
-//! original editor's. Clicking a piece opens a popup beside it with its
+//! the pointer's cell, the selection and pictures of the pieces that cannot
+//! be seen from above, the links and the warnings. Pieces are drawn with the
+//! pictures [`crate::editor_icons`] makes. Clicking a piece opens a popup beside it with its
 //! choices, and a sign's text.
 
 use std::collections::HashMap;
@@ -40,6 +40,8 @@ use crate::texture;
 const ICON: f32 = 40.0;
 /// The Pieces window's size for them.
 const BIG_ICON: f32 = 96.0;
+/// A marker's share of its cell.
+const MARKER: f32 = 0.7;
 const GROUPS: [(Group, &str); 10] = [
     (Group::Ground, "Ground"),
     (Group::Wall, "Walls"),
@@ -53,6 +55,7 @@ const GROUPS: [(Group, &str); 10] = [
     (Group::Scenery, "Scenery"),
 ];
 const GRID: Color32 = Color32::from_rgba_premultiplied(30, 30, 30, 30);
+const COVER: Color32 = Color32::from_rgb(27, 27, 27);
 const EDGE: Color32 = Color32::from_rgb(255, 220, 90);
 const HOVER: Color32 = Color32::WHITE;
 const CHOSEN: Color32 = Color32::from_rgb(90, 200, 255);
@@ -91,8 +94,8 @@ struct Palette {
     sheets: HashMap<&'static str, Option<Sheet>>,
     picked: Option<(&'static Piece, Vec<usize>)>,
     hide_links: bool,
-    /// The picture of every piece, once it is made.
-    pictures: Option<TextureId>,
+    /// The sheets of pictures of the pieces, as egui knows them.
+    pictures: HashMap<AssetId<Image>, TextureId>,
 }
 
 impl Palette {
@@ -119,30 +122,28 @@ impl Palette {
     }
 }
 
-/// What draws an entry in the palette: its picture from the game, or else
-/// its sprite from the original editor.
-fn entry_icon(
-    entry: &Entry,
+/// What draws a piece: its picture from the game, or else its sprite from
+/// the original editor.
+fn piece_icon(
+    (layer, code): (Layer, i32),
     palette: &mut Palette,
     icons: &Icons,
     data: &GameData,
     images: &mut Assets<Image>,
     contexts: &mut EguiContexts,
 ) -> Option<(TextureId, EguiRect)> {
-    if let (Some(rect), Some(image)) = (
-        icons.get(entry.piece.layer, entry.code()),
-        icons.image.as_ref(),
-    ) {
+    if let (Some(rect), Some(image)) = (icons.get(layer, code), icons.image.as_ref()) {
         let id = *palette
             .pictures
-            .get_or_insert_with(|| contexts.add_image(EguiTextureHandle::Strong(image.clone())));
+            .entry(image.id())
+            .or_insert_with(|| contexts.add_image(EguiTextureHandle::Strong(image.clone())));
         let uv = EguiRect::from_min_max(
             egui::pos2(rect.min[0], rect.min[1]),
             egui::pos2(rect.max[0], rect.max[1]),
         );
         return Some((id, uv));
     }
-    let sprite = catalogue::sprite(entry.piece.layer, entry.code())?;
+    let sprite = catalogue::sprite(layer, code)?;
     palette.icon(sprite, data, images, contexts)
 }
 
@@ -335,7 +336,18 @@ fn panels(
             .is_some_and(|layer| layer.order != egui::Order::Background)
     });
 
-    if let Ok((camera, transform)) = camera.single() {
+    // The stage is on show behind this.
+    if studio.busy {
+        let painter = root.painter_at(area);
+        painter.rect_filled(area, 0.0, COVER);
+        painter.text(
+            area.center(),
+            egui::Align2::CENTER_CENTER,
+            &studio.status,
+            egui::FontId::proportional(16.0),
+            Color32::WHITE,
+        );
+    } else if let Ok((camera, transform)) = camera.single() {
         let projection = Projection { camera, transform };
         let painter = root.painter_at(area);
         canvas_marks(
@@ -344,14 +356,21 @@ fn panels(
             palette,
             studio,
             &editing,
+            &icons,
             &data,
             &mut images,
             &mut contexts,
         );
     }
     if let (Some(carried), Some(pointer)) = (studio.carrying, studio.pointer)
-        && let Some(sprite) = catalogue::sprite(carried.layer, carried.code)
-        && let Some((id, uv)) = palette.icon(sprite, &data, &mut images, &mut contexts)
+        && let Some((id, uv)) = piece_icon(
+            (carried.layer, carried.code),
+            palette,
+            &icons,
+            &data,
+            &mut images,
+            &mut contexts,
+        )
         && !studio.on_canvas()
     {
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, "carried".into()));
@@ -888,7 +907,8 @@ fn palette_item(
         .filter(|_| picked)
         .map_or(entry.choices.clone(), |(_, c)| c.clone());
     let piece_brush = brush(piece, &choices);
-    let icon = entry_icon(entry, palette, icons, data, images, contexts);
+    let own = (piece.layer, entry.code());
+    let icon = piece_icon(own, palette, icons, data, images, contexts);
     let name = entry.name();
     let response = match icon {
         Some((id, uv)) => egui::Image::new(SizedTexture::new(id, EguiVec::splat(size)))
@@ -922,6 +942,7 @@ fn canvas_marks(
     palette: &mut Palette,
     studio: &Studio,
     editing: &Editing,
+    icons: &Icons,
     data: &GameData,
     images: &mut Assets<Image>,
     contexts: &mut EguiContexts,
@@ -957,9 +978,9 @@ fn canvas_marks(
             ] {
                 let inside = (1..width - 1).contains(&x) && (1..height - 1).contains(&y);
                 if needs_marker(layer, code, inside)
-                    && let Some(sprite) = catalogue::sprite(layer, code)
-                    && let Some((id, uv)) = palette.icon(sprite, data, images, contexts)
-                    && let Some(rect) = projection.cell_rect((x as isize, y as isize), 0.5)
+                    && let Some((id, uv)) =
+                        piece_icon((layer, code), palette, icons, data, images, contexts)
+                    && let Some(rect) = projection.cell_rect((x as isize, y as isize), MARKER)
                 {
                     painter.image(id, rect, uv, Color32::WHITE);
                 }
@@ -1048,8 +1069,14 @@ fn canvas_marks(
         projection.outline(painter, cell, (1, 1), Stroke::new(2.0, HOVER));
     }
     if let Some((brush, cell)) = ghost
-        && let Some(sprite) = catalogue::sprite(brush.layer, brush.code)
-        && let Some((id, uv)) = palette.icon(sprite, data, images, contexts)
+        && let Some((id, uv)) = piece_icon(
+            (brush.layer, brush.code),
+            palette,
+            icons,
+            data,
+            images,
+            contexts,
+        )
         && let Some(rect) = projection.cell_rect(cell, 1.0)
     {
         painter.image(id, rect, uv, Color32::from_white_alpha(170));

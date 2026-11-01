@@ -31,6 +31,7 @@ use wonderland_logic::world::Lights;
 use wonderland_logic::{Spawn, World};
 
 use crate::coords::{triangle, vec};
+use crate::editor_icons::Icons;
 use crate::flow::level_shown;
 use crate::level::{GameData, LevelData};
 use crate::lighting::light_direction;
@@ -807,13 +808,18 @@ fn sync_objects(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut cache: ResMut<TextureCache>,
+    icons: Option<Res<Icons>>,
 ) {
     let Some(models) = models else {
         return;
     };
     let world = &sim.world;
     let lights = sim.lights();
-    let list = draws(world, &models, level_style(&level), &anim);
+    let mut list = draws(world, &models, level_style(&level), &anim);
+    // A palette picture has the piece alone.
+    if icons.is_some_and(|i| i.staging()) {
+        list.retain(|d| !matches!(d.model, ModelId::Shadow | ModelId::CoinShadow));
+    }
 
     let mut grouped: HashMap<ModelId, Vec<&Draw>> = HashMap::new();
     for d in &list {

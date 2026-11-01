@@ -34,7 +34,7 @@ use wonderland_editor::proof::{Recording, Solution, fair};
 use wonderland_editor::settings::{Folder, Setting};
 use wonderland_editor::{Clip, Editor, level_name, stamp};
 use wonderland_formats::Level;
-use wonderland_formats::catalogue::{self, Group, Layer};
+use wonderland_formats::catalogue::{self, Group, Layer, Piece};
 use wonderland_logic::{Completion, Ruleset};
 
 use crate::camera::{FAR, GameCamera, fov, view_aspect};
@@ -1055,17 +1055,36 @@ fn full_light(sim: &mut Sim) {
     lights.ambient = lights.ambient_target;
 }
 
+/// A spike's height at full stretch.
+const SPIKES_UP: f32 = 0.5;
+
+/// Whether a tile's piece is a model on the floor, rather than the surface.
+fn stands_on_floor(piece: &Piece) -> bool {
+    const ELECTRO_FLOOR: i32 = 700;
+    const TELEPORTER: i32 = 1200;
+    matches!(
+        piece.group,
+        Group::Hazard | Group::Switch | Group::Box | Group::Monster
+    ) && !matches!(piece.base, ELECTRO_FLOOR | TELEPORTER)
+}
+
 /// Starts the stage [`crate::editor_icons`] photographs.
-pub fn begin_stage(data: &GameData, level: Level) -> Result<(LevelData, Sim), String> {
+pub fn begin_stage(data: &GameData, level: Level, snow: bool) -> Result<(LevelData, Sim), String> {
     let (mut level, mut sim) = begin_memory(data, level, 0)?;
+    // Snow changes a tile; the flag itself would be a piece on the stage.
+    level.setup.weather.snow = snow;
     full_light(&mut sim);
-    // A monster on a tile leaves floor behind, which is not part of it.
+    // A piece on a tile leaves floor under it, which is not part of it.
     let grid = &mut level.setup.grid;
     for (x, y) in grid.cells() {
         let code = level.level.tile(x as usize, y as usize);
-        if catalogue::find(Layer::Tile, code).is_some_and(|p| p.group == Group::Monster) {
+        if catalogue::find(Layer::Tile, code).is_some_and(stands_on_floor) {
             grid.set(x, y, 0);
         }
+    }
+    // Spikes start in the ground.
+    for spike in &mut sim.world.spikes {
+        spike.height = SPIKES_UP;
     }
     Ok((level, sim))
 }
